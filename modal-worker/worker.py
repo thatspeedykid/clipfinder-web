@@ -1,8 +1,7 @@
 # modal-worker/worker.py
-# ClipFinder video processing worker — Session 1 update
-# Supports: YouTube (+ cookies), Kick, Twitch, Twitter/X
-# No-download mode: only pulls clip segments, not full VOD
-# Parakeet TDT transcription option (Modal GPU)
+# ClipFinder video processing worker
+# Supports: YouTube (+user cookies), Kick, Twitch, Twitter/X
+# No-download mode: only pulls clip segments
 # Deploy: modal deploy worker.py
 
 import modal
@@ -15,7 +14,6 @@ from pathlib import Path
 
 app = modal.App("clipfinder-worker")
 
-# Base image with ffmpeg + yt-dlp
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg", "curl")
@@ -29,46 +27,26 @@ image = (
     )
 )
 
-# GPU image for Parakeet transcription (only loaded when needed)
-gpu_image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .apt_install("ffmpeg", "curl", "git")
-    .pip_install(
-        "yt-dlp",
-        "groq",
-        "boto3",
-        "requests",
-        "supabase",
-        "fastapi[standard]",
-        "torch",
-        "nemo_toolkit[asr]",
-        "huggingface_hub",
-    )
-)
-
 secrets = [modal.Secret.from_name("clipfinder-secrets")]
 
 
-def update_job(supabase_client, job_id, status, progress, msg, extra={}):
-    data = {"status": status, "progress": progress, "progress_msg": msg, **extra}
-    supabase_client.table("jobs").update(data).eq("id", job_id).execute()
+def update_job(sb, job_id, status, progress, msg, extra={}):
+    sb.table("jobs").update({"status": status, "progress": progress, "progress_msg": msg, **extra}).eq("id", job_id).execute()
     print(f"[{job_id[:8]}] {status} {progress}% — {msg}")
 
 
-def get_flag(supabase_client, key, default=True):
-    """Check a feature flag from the DB"""
+def get_flag(sb, key, default=True):
     try:
-        res = supabase_client.table("feature_flags").select("enabled").eq("key", key).single().execute()
-        return res.data["enabled"] if res.data else default
+        r = sb.table("feature_flags").select("enabled").eq("key", key).single().execute()
+        return r.data["enabled"] if r.data else default
     except Exception:
         return default
 
 
-def get_config(supabase_client, key, default=""):
-    """Get a config value from the DB"""
+def get_config(sb, key, default=""):
     try:
-        res = supabase_client.table("config").select("value").eq("key", key).single().execute()
-        return res.data["value"] if res.data else default
+        r = sb.table("config").select("value").eq("key", key).single().execute()
+        return r.data["value"] if r.data else default
     except Exception:
         return default
 
@@ -83,7 +61,6 @@ def ts_to_seconds(ts):
 
 
 def detect_source(url):
-    """Detect platform from URL"""
     if "youtube.com" in url or "youtu.be" in url:
         return "youtube"
     if "kick.com" in url:
@@ -95,210 +72,236 @@ def detect_source(url):
     return "unknown"
 
 
-def build_ydl_cmd(url, output_path, cookies_file=None, sections=None, source="unknown"):
-    """Build yt-dlp command with platform-specific options"""
+def get_user_cookies(sb, user_id):
+    """Get user's personal YouTube cookies from user_secrets table."""
+    try:
+        r = sb.table("user_secrets").select("yt_cookies").eq("user_id", user_id).single().execute()
+        return (r.data or {}).get("yt_cookies", "")
+    except Exception:
+        return ""
+
+
+def write_cookies_file(tmp, cookie_content):
+    """Write cookies to a temp file and return the path."""
+    if not cookie_content.strip():
+        return None
+    path = str(tmp / "cookies.txt")
+    with open(path, "w") as f:
+        f.write(cookie_content)
+    return path
+
+
+def run_yt_dlp(cmd, timeout=300):
+    """Run yt-dlp with common error handling."""
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    return result
+
+
+def download_audio(url, tmp, source, cookies_file=None):
+    """Download audio only — much faster than full video."""
+    audio_raw = tmp / "audio_raw.%(ext)s"
     cmd = [
-        "yt-dlp",
-        url,
-        "-o", str(output_path),
-        "--write-info-json",
-        "--merge-output-format", "mp4",
-        "--no-playlist",
-        "--quiet",
-        "--no-warnings",
+        "yt-dlp", url,
+        "-o", str(audio_raw),
+        "-x", "--audio-format", "mp3", "--audio-quality", "64K",
+        "--no-playlist", "--quiet", "--no-warnings",
     ]
 
-    # Quality — 720p max to save bandwidth
-    if source in ("twitter", "twitch", "kick"):
+    if source == "kick":
+        # Kick needs impersonation to bypass 403
+        cmd += [
+            "--add-headers", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "--add-headers", "Referer:https://kick.com/",
+            "--extractor-retries", "5",
+            "--fragment-retries", "5",
+        ]
+    elif source == "twitch":
+        cmd += ["-f", "audio_only/bestaudio/best"]
+    elif source in ("twitter", "unknown"):
+        cmd += ["-f", "bestaudio/best"]
+
+    if cookies_file:
+        cmd += ["--cookies", cookies_file]
+
+    return run_yt_dlp(cmd)
+
+
+def get_video_info(url, cookies_file=None):
+    """Get video metadata without downloading."""
+    cmd = ["yt-dlp", url, "--dump-json", "--no-playlist", "--quiet"]
+    if cookies_file:
+        cmd += ["--cookies", cookies_file]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode == 0 and result.stdout.strip():
+        try:
+            return json.loads(result.stdout.strip())
+        except Exception:
+            pass
+    return {}
+
+
+def convert_to_mp3(input_path, output_path, bitrate="64k"):
+    """Convert any audio file to mono mp3."""
+    subprocess.run([
+        "ffmpeg", "-i", str(input_path),
+        "-ar", "16000", "-ac", "1", "-b:a", bitrate,
+        str(output_path), "-y", "-loglevel", "error"
+    ], timeout=120)
+
+
+def compress_audio_if_needed(audio_path, tmp):
+    """Compress audio if over 24MB (Groq limit)."""
+    size_mb = audio_path.stat().st_size / 1024 / 1024
+    if size_mb > 24:
+        compressed = tmp / "audio_small.mp3"
+        convert_to_mp3(audio_path, compressed, "32k")
+        if compressed.exists():
+            print(f"[audio] compressed {size_mb:.1f}MB → {compressed.stat().st_size/1024/1024:.1f}MB")
+            return compressed
+    return audio_path
+
+
+def transcribe_with_groq(audio_path, groq_api_key):
+    """Transcribe audio with Groq Whisper, return timestamped text."""
+    from groq import Groq
+    client = Groq(api_key=groq_api_key)
+    with open(audio_path, "rb") as f:
+        result = client.audio.transcriptions.create(
+            file=(audio_path.name, f),
+            model="whisper-large-v3",
+            response_format="verbose_json",
+            timestamp_granularities=["segment"],
+        )
+    segments = result.segments or []
+    lines = []
+    for seg in segments:
+        start = seg.get("start", 0)
+        text = seg.get("text", "").strip()
+        h, m, s = int(start // 3600), int((start % 3600) // 60), start % 60
+        lines.append(f"[{h:02d}:{m:02d}:{s:05.2f}] {text}")
+    print(f"[transcribe] {len(segments)} segments")
+    return "\n".join(lines)
+
+
+def cut_clip_section(url, start_ts, end_ts, output_path, cookies_file=None, source="unknown"):
+    """Download only the specific clip section (no-download mode)."""
+    section_str = f"*{start_ts}-{end_ts}"
+    cmd = [
+        "yt-dlp", url,
+        "-o", str(output_path.parent / f"{output_path.stem}.%(ext)s"),
+        "--download-sections", section_str,
+        "--force-keyframes-at-cuts",
+        "--merge-output-format", "mp4",
+        "--no-playlist", "--quiet", "--no-warnings",
+    ]
+    if source == "kick":
+        cmd += [
+            "--add-headers", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "--add-headers", "Referer:https://kick.com/",
+            "--extractor-retries", "5",
+        ]
+    elif source in ("twitter", "twitch", "unknown"):
         cmd += ["-f", "best[height<=720]/best"]
     else:
         cmd += ["-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best"]
 
-    # Kick-specific: use the direct stream URL approach
-    if source == "kick":
-        cmd += [
-            "--extractor-retries", "3",
-            "--fragment-retries", "3",
-        ]
-
-    # No-download mode: only pull specific sections
-    if sections:
-        section_str = ";".join([f"*{s['start']}-{s['end']}" for s in sections])
-        cmd += ["--download-sections", section_str, "--force-keyframes-at-cuts"]
-
-    # YouTube cookies bypass
-    if cookies_file and os.path.exists(cookies_file):
+    if cookies_file:
         cmd += ["--cookies", cookies_file]
 
-    return cmd
+    return run_yt_dlp(cmd)
 
 
 @app.function(image=image, secrets=secrets, timeout=600, memory=2048, cpu=2.0)
 def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"):
-    from groq import Groq
     from supabase import create_client
     import requests as req
 
-    supabase = create_client(
-        os.environ["NEXT_PUBLIC_SUPABASE_URL"],
-        os.environ["SUPABASE_SERVICE_ROLE_KEY"],
-    )
+    sb = create_client(os.environ["NEXT_PUBLIC_SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"])
 
-    # Check feature flags
-    use_parakeet = get_flag(supabase, "transcribe_parakeet", False)
-    use_groq = get_flag(supabase, "transcribe_groq", True)
-    no_download_mode = get_flag(supabase, "feature_no_download", True)
-    use_cookies = get_flag(supabase, "feature_youtube_cookies", True)
+    use_groq = get_flag(sb, "transcribe_groq", True)
+    use_cookies_flag = get_flag(sb, "feature_youtube_cookies", True)
+    no_download_mode = get_flag(sb, "feature_no_download", True)
 
     source = detect_source(source_url)
-    print(f"[source] {source} — {source_url[:60]}")
+    print(f"[source] {source} — {source_url[:80]}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
 
-        # ── Get cookies if configured ─────────────────────────────────────────
+        # ── Cookies: user-specific first, then global fallback ────────────────
         cookies_file = None
-        if use_cookies and source == "youtube":
-            cookie_content = get_config(supabase, "YOUTUBE_COOKIES", "")
-            if cookie_content.strip():
-                cookies_file = str(tmp / "cookies.txt")
-                with open(cookies_file, "w") as f:
-                    f.write(cookie_content)
+        if use_cookies_flag:
+            cookie_content = get_user_cookies(sb, user_id)
+            if not cookie_content.strip():
+                cookie_content = get_config(sb, "YOUTUBE_COOKIES", "")
+            cookies_file = write_cookies_file(tmp, cookie_content)
+            if cookies_file:
+                print(f"[cookies] loaded ({len(cookie_content)} chars)")
 
-        # ── Step 1: Get video metadata first (fast, no download) ──────────────
-        update_job(supabase, job_id, "downloading", 5, "Fetching video info...")
+        # ── Step 1: Get video info ────────────────────────────────────────────
+        update_job(sb, job_id, "downloading", 5, "Fetching video info...")
+        info = get_video_info(source_url, cookies_file)
+        video_title = info.get("title", "")
+        video_duration = int(info.get("duration", 0))
+        if video_title:
+            sb.table("jobs").update({"video_title": video_title, "video_duration": video_duration}).eq("id", job_id).execute()
+            print(f"[info] {video_title} ({video_duration}s)")
 
-        info_cmd = ["yt-dlp", source_url, "--dump-json", "--no-playlist", "--quiet"]
-        if cookies_file:
-            info_cmd += ["--cookies", cookies_file]
+        # ── Step 2: Download audio ─────────────────────────────────────────────
+        update_job(sb, job_id, "downloading", 15, "Downloading audio...")
+        audio_result = download_audio(source_url, tmp, source, cookies_file)
+        audio_files = list(tmp.glob("audio_raw.*"))
 
-        info_result = subprocess.run(info_cmd, capture_output=True, text=True, timeout=60)
-        video_title = ""
-        video_duration = 0
-
-        if info_result.returncode == 0 and info_result.stdout.strip():
-            try:
-                info = json.loads(info_result.stdout.strip())
-                video_title = info.get("title", "")
-                video_duration = int(info.get("duration", 0))
-                supabase.table("jobs").update({
-                    "video_title": video_title,
-                    "video_duration": video_duration,
-                }).eq("id", job_id).execute()
-                print(f"[info] {video_title} ({video_duration}s)")
-            except Exception as e:
-                print(f"[info] parse failed: {e}")
-
-        # ── Step 2: Download audio for transcription ──────────────────────────
-        update_job(supabase, job_id, "downloading", 15, "Downloading audio...")
-
-        audio_path = tmp / "audio.mp3"
-
-        # Download audio only (much faster than full video)
-        audio_cmd = [
-            "yt-dlp", source_url,
-            "-o", str(tmp / "audio_raw.%(ext)s"),
-            "-x", "--audio-format", "mp3", "--audio-quality", "64K",
-            "--no-playlist", "--quiet", "--no-warnings",
-        ]
-        if cookies_file:
-            audio_cmd += ["--cookies", cookies_file]
-        if source == "twitch":
-            audio_cmd += ["-f", "audio_only/best"]
-
-        audio_result = subprocess.run(audio_cmd, capture_output=True, text=True, timeout=300)
-
-        if audio_result.returncode != 0:
-            # Try full download fallback
-            print(f"[audio] direct audio failed, trying full download: {audio_result.stderr[-200:]}")
-            video_path = tmp / "video.%(ext)s"
-            dl_cmd = build_ydl_cmd(source_url, video_path, cookies_file, source=source)
-            dl_result = subprocess.run(dl_cmd, capture_output=True, text=True, timeout=300)
-            if dl_result.returncode != 0:
-                err = dl_result.stderr[-400:] if dl_result.stderr else "Download failed"
-                if "Sign in" in err or "cookies" in err.lower():
-                    err = "This video requires login. Add your YouTube cookies in Settings."
-                elif "Private" in err:
-                    err = "This video is private."
-                elif "available" in err.lower():
-                    err = "This video is not available."
-                update_job(supabase, job_id, "error", 0, err, {"error_msg": err})
-                return
-
-            # Extract audio from downloaded video
-            video_files = list(tmp.glob("video.*"))
-            if video_files:
-                subprocess.run([
-                    "ffmpeg", "-i", str(video_files[0]),
-                    "-vn", "-ar", "16000", "-ac", "1", "-b:a", "64k",
-                    str(audio_path), "-y", "-loglevel", "error"
-                ], timeout=120)
-        else:
-            audio_files = list(tmp.glob("audio_raw.*"))
-            if audio_files:
-                subprocess.run([
-                    "ffmpeg", "-i", str(audio_files[0]),
-                    "-ar", "16000", "-ac", "1", "-b:a", "64k",
-                    str(audio_path), "-y", "-loglevel", "error"
-                ], timeout=60)
-
-        if not audio_path.exists():
-            err = "Could not extract audio from video"
-            update_job(supabase, job_id, "error", 0, err, {"error_msg": err})
+        if audio_result.returncode != 0 or not audio_files:
+            # Parse error for user-friendly message
+            stderr = audio_result.stderr if audio_result.returncode != 0 else ""
+            if "Sign in" in stderr or "cookies" in stderr.lower():
+                err = "This video requires login. Add your YouTube cookies in Settings."
+            elif "Private" in stderr:
+                err = "This video is private."
+            elif "403" in stderr or "Forbidden" in stderr:
+                err = f"Access denied by {source.capitalize()}. This clip may be private or region-locked."
+            elif "available" in stderr.lower():
+                err = "This video is not available."
+            else:
+                err = f"Download failed: {stderr[-200:] if stderr else 'Unknown error'}"
+            update_job(sb, job_id, "error", 0, err, {"error_msg": err})
             return
 
-        audio_size = audio_path.stat().st_size / 1024 / 1024
-        print(f"[audio] {audio_size:.1f}MB")
+        # Convert to standard mp3
+        audio_path = tmp / "audio.mp3"
+        convert_to_mp3(audio_files[0], audio_path)
+        if not audio_path.exists():
+            err = "Audio conversion failed"
+            update_job(sb, job_id, "error", 0, err, {"error_msg": err})
+            return
 
-        # Compress if over 24MB (Groq limit)
-        if audio_size > 24:
-            compressed = tmp / "audio_compressed.mp3"
-            subprocess.run([
-                "ffmpeg", "-i", str(audio_path),
-                "-ar", "16000", "-ac", "1", "-b:a", "32k",
-                str(compressed), "-y", "-loglevel", "error"
-            ], timeout=60)
-            if compressed.exists():
-                audio_path = compressed
-                print(f"[audio] compressed to {audio_path.stat().st_size / 1024 / 1024:.1f}MB")
+        audio_path = compress_audio_if_needed(audio_path, tmp)
+        print(f"[audio] {audio_path.stat().st_size/1024/1024:.1f}MB")
 
-        # ── Step 3: Transcribe ────────────────────────────────────────────────
-        update_job(supabase, job_id, "transcribing", 35, "Transcribing audio...")
-
+        # ── Step 3: Transcribe ─────────────────────────────────────────────────
+        update_job(sb, job_id, "transcribing", 35, "Transcribing audio...")
         transcript_text = ""
 
         if use_groq:
-            groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
-            with open(audio_path, "rb") as f:
-                transcription = groq_client.audio.transcriptions.create(
-                    file=(audio_path.name, f),
-                    model="whisper-large-v3",
-                    response_format="verbose_json",
-                    timestamp_granularities=["segment"],
-                )
-            segments = transcription.segments or []
-            lines = []
-            for seg in segments:
-                start = seg.get("start", 0)
-                text = seg.get("text", "").strip()
-                h, m, s = int(start // 3600), int((start % 3600) // 60), start % 60
-                lines.append(f"[{h:02d}:{m:02d}:{s:05.2f}] {text}")
-            transcript_text = "\n".join(lines)
-            print(f"[transcribe] Groq done — {len(segments)} segments")
+            try:
+                transcript_text = transcribe_with_groq(audio_path, os.environ["GROQ_API_KEY"])
+            except Exception as e:
+                print(f"[transcribe] Groq failed: {e}")
 
         if not transcript_text:
-            err = "Transcription failed — no text returned"
-            update_job(supabase, job_id, "error", 0, err, {"error_msg": err})
+            err = "Transcription failed"
+            update_job(sb, job_id, "error", 0, err, {"error_msg": err})
             return
 
-        supabase.table("jobs").update({"transcript": transcript_text}).eq("id", job_id).execute()
-        update_job(supabase, job_id, "analyzing", 50, "AI finding best clips...")
+        sb.table("jobs").update({"transcript": transcript_text}).eq("id", job_id).execute()
+        update_job(sb, job_id, "analyzing", 50, "AI finding best clips...")
 
-        # ── Step 4: AI analysis via Vercel ───────────────────────────────────
+        # ── Step 4: AI analysis ────────────────────────────────────────────────
         app_url = os.environ.get("NEXT_PUBLIC_APP_URL", "").rstrip("/")
         analyze_resp = req.post(
             f"{app_url}/api/analyze",
-            json={"jobId": job_id, "transcript": transcript_text, "videoTitle": video_title, "mode": mode},
+            json={"jobId": job_id, "transcript": transcript_text, "videoTitle": video_title, "mode": mode, "userId": user_id},
             headers={"Authorization": f"Bearer {os.environ['WORKER_SECRET']}", "Content-Type": "application/json"},
             timeout=120,
         )
@@ -309,128 +312,75 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
                 err = analyze_resp.json().get("error", err)
             except Exception:
                 pass
-            update_job(supabase, job_id, "error", 0, err, {"error_msg": err})
+            update_job(sb, job_id, "error", 0, err, {"error_msg": err})
             return
 
         clips = analyze_resp.json().get("clips", [])
         if not clips:
             err = "No clips found in this video"
-            update_job(supabase, job_id, "error", 0, err, {"error_msg": err})
+            update_job(sb, job_id, "error", 0, err, {"error_msg": err})
             return
 
-        update_job(supabase, job_id, "cutting", 70, f"Cutting {len(clips)} clips...")
+        update_job(sb, job_id, "cutting", 70, f"Cutting {len(clips)} clips...")
 
-        # ── Step 5: Download ONLY clip sections + cut ─────────────────────────
+        # ── Step 5: Cut clips ──────────────────────────────────────────────────
         for i, clip in enumerate(clips):
-            clip_id = clip.get("id", "")
             start_ts = clip.get("start_ts", "00:00:00")
             end_ts = clip.get("end_ts", "00:01:00")
-            start_sec = ts_to_seconds(start_ts)
-            end_sec = ts_to_seconds(end_ts)
-            duration = end_sec - start_sec
-
+            duration = ts_to_seconds(end_ts) - ts_to_seconds(start_ts)
             if duration <= 0:
                 continue
 
             progress = 70 + int((i / len(clips)) * 25)
-            update_job(supabase, job_id, "cutting", progress, f"Cutting clip {i+1}/{len(clips)}")
+            update_job(sb, job_id, "cutting", progress, f"Cutting clip {i+1}/{len(clips)}")
 
             clip_path = tmp / f"clip_{i+1}.mp4"
 
             if no_download_mode:
-                # Download ONLY this segment (no full VOD needed)
-                section_str = f"*{start_ts}-{end_ts}"
-                segment_output = tmp / f"segment_{i+1}.%(ext)s"
-                seg_cmd = [
-                    "yt-dlp", source_url,
-                    "-o", str(segment_output),
-                    "--download-sections", section_str,
-                    "--force-keyframes-at-cuts",
-                    "--merge-output-format", "mp4",
-                    "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-                    "--no-playlist", "--quiet",
-                ]
-                if cookies_file:
-                    seg_cmd += ["--cookies", cookies_file]
-
-                seg_result = subprocess.run(seg_cmd, capture_output=True, text=True, timeout=180)
-                seg_files = list(tmp.glob(f"segment_{i+1}.*"))
-
-                if seg_result.returncode == 0 and seg_files:
-                    # Re-encode to ensure clean cuts
-                    subprocess.run([
-                        "ffmpeg", "-i", str(seg_files[0]),
-                        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                        "-c:a", "aac", "-b:a", "128k",
-                        str(clip_path), "-y", "-loglevel", "error"
-                    ], timeout=120)
+                result = cut_clip_section(source_url, start_ts, end_ts, clip_path, cookies_file, source)
+                seg_files = list(tmp.glob(f"clip_{i+1}.*"))
+                if result.returncode == 0 and seg_files:
+                    actual = seg_files[0]
+                    if str(actual) != str(clip_path):
+                        subprocess.run(["ffmpeg", "-i", str(actual), "-c", "copy", str(clip_path), "-y", "-loglevel", "error"], timeout=60)
                 else:
-                    print(f"[cut] section download failed for clip {i+1}, skipping")
+                    print(f"[cut] clip {i+1} section download failed: {result.stderr[-100:]}")
                     continue
             else:
-                # Full video already downloaded — use ffmpeg seek
-                video_files = list(tmp.glob("video.*"))
-                if not video_files:
-                    print(f"[cut] no video file found for clip {i+1}")
-                    continue
-                subprocess.run([
-                    "ffmpeg",
-                    "-ss", str(start_sec), "-i", str(video_files[0]),
-                    "-t", str(duration),
-                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                    "-c:a", "aac", "-b:a", "128k",
-                    "-avoid_negative_ts", "make_zero",
-                    str(clip_path), "-y", "-loglevel", "error"
-                ], timeout=180)
-
-            if not clip_path.exists():
-                print(f"[cut] clip {i+1} failed")
+                print(f"[cut] clip {i+1} — no full video available, skipping")
                 continue
 
-            clip_size = clip_path.stat().st_size / 1024 / 1024
-            print(f"[cut] clip {i+1} done — {clip_size:.1f}MB")
+            if not clip_path.exists():
+                print(f"[cut] clip {i+1} output missing")
+                continue
+
+            print(f"[cut] clip {i+1} — {clip_path.stat().st_size/1024/1024:.1f}MB")
 
             # Upload to R2 if configured
-            r2_ready = all([
-                os.environ.get("CLOUDFLARE_R2_ACCOUNT_ID"),
-                os.environ.get("CLOUDFLARE_R2_ACCESS_KEY_ID"),
-                os.environ.get("CLOUDFLARE_R2_SECRET_ACCESS_KEY"),
-                os.environ.get("CLOUDFLARE_R2_BUCKET_NAME"),
-                os.environ.get("CLOUDFLARE_R2_PUBLIC_URL"),
-            ])
-
-            if r2_ready:
+            r2_keys = ["CLOUDFLARE_R2_ACCOUNT_ID", "CLOUDFLARE_R2_ACCESS_KEY_ID",
+                       "CLOUDFLARE_R2_SECRET_ACCESS_KEY", "CLOUDFLARE_R2_BUCKET_NAME", "CLOUDFLARE_R2_PUBLIC_URL"]
+            if all(os.environ.get(k) for k in r2_keys):
                 try:
                     import boto3
                     from botocore.config import Config
-                    s3 = boto3.client(
-                        "s3",
+                    s3 = boto3.client("s3",
                         endpoint_url=f"https://{os.environ['CLOUDFLARE_R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
                         aws_access_key_id=os.environ["CLOUDFLARE_R2_ACCESS_KEY_ID"],
                         aws_secret_access_key=os.environ["CLOUDFLARE_R2_SECRET_ACCESS_KEY"],
-                        config=Config(signature_version="s3v4"),
-                        region_name="auto",
-                    )
+                        config=Config(signature_version="s3v4"), region_name="auto")
                     r2_key = f"clips/{user_id}/{job_id}/clip_{i+1}.mp4"
                     s3.upload_file(str(clip_path), os.environ["CLOUDFLARE_R2_BUCKET_NAME"], r2_key,
                                    ExtraArgs={"ContentType": "video/mp4"})
                     file_url = f"{os.environ['CLOUDFLARE_R2_PUBLIC_URL']}/{r2_key}"
                     from datetime import datetime, timedelta
-                    expires = (datetime.utcnow() + timedelta(days=1)).isoformat()
-                    supabase.table("clips").update({"file_url": file_url, "file_expires_at": expires}).eq("id", clip.get("id", "")).execute()
+                    sb.table("clips").update({"file_url": file_url, "file_expires_at": (datetime.utcnow()+timedelta(days=1)).isoformat()}).eq("id", clip.get("id","")).execute()
                     print(f"[r2] uploaded: {file_url}")
-                    # Delete local file to save Modal storage
-                    clip_path.unlink(missing_ok=True)
                 except Exception as e:
-                    print(f"[r2] upload failed: {e}")
-            else:
-                # No R2 — clips are processed but not stored
-                # Future: use Modal's built-in volume or signed URLs
-                print(f"[storage] R2 not configured — clip {i+1} processed but not stored")
-                clip_path.unlink(missing_ok=True)
+                    print(f"[r2] failed: {e}")
 
-        # ── Done ──────────────────────────────────────────────────────────────
-        update_job(supabase, job_id, "done", 100, f"Done! {len(clips)} clips ready", {"clips_found": len(clips)})
+            clip_path.unlink(missing_ok=True)
+
+        update_job(sb, job_id, "done", 100, f"Done! {len(clips)} clips ready", {"clips_found": len(clips)})
         print(f"[done] job {job_id[:8]} — {len(clips)} clips")
 
 
@@ -438,7 +388,6 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
 @modal.fastapi_endpoint(method="POST")
 def start(body: dict):
     from supabase import create_client
-
     job_id = body.get("jobId")
     source_url = body.get("url")
     user_id = body.get("userId")
@@ -448,7 +397,6 @@ def start(body: dict):
     worker_secret = os.environ.get("WORKER_SECRET", "")
     if worker_secret and auth_token != worker_secret:
         return {"error": "Unauthorized"}, 401
-
     if not job_id or not source_url or not user_id:
         return {"error": "jobId, url, and userId required"}, 400
 
@@ -456,28 +404,16 @@ def start(body: dict):
     return {"success": True, "jobId": job_id}
 
 
-@app.local_entrypoint()
-def main():
-    print("ClipFinder worker ready. Deploy with: modal deploy worker.py")
-
-
-# ── Subtitle/transcript extraction (no video download) ────────────────────────
 @app.function(image=image, secrets=secrets, timeout=120)
 @modal.fastapi_endpoint(method="POST")
 def extract(body: dict):
-    """Extract transcript from a URL without downloading the video.
-    Uses auto-generated subtitles first, falls back to audio-only Groq Whisper."""
-    import tempfile
-    from pathlib import Path
-    from groq import Groq
-
+    """Extract transcript from URL without downloading full video."""
     url = body.get("url", "")
     auth_token = body.get("authToken", "")
     worker_secret = os.environ.get("WORKER_SECRET", "")
 
     if worker_secret and auth_token != worker_secret:
         return {"error": "Unauthorized"}, 401
-
     if not url:
         return {"error": "url required"}, 400
 
@@ -486,148 +422,68 @@ def extract(body: dict):
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
 
-        # ── Try 1: Auto-generated subtitles (fastest, no download) ───────────
+        # Try subtitles first (fastest)
         sub_cmd = [
-            "yt-dlp", url,
-            "--skip-download",
+            "yt-dlp", url, "--skip-download",
             "--write-auto-subs", "--write-subs",
-            "--sub-format", "vtt",
-            "--sub-lang", "en,en-US,en-GB",
-            "-o", str(tmp / "subs"),
-            "--quiet", "--no-warnings",
+            "--sub-format", "vtt", "--sub-lang", "en,en-US,en-GB",
+            "-o", str(tmp / "subs"), "--quiet",
         ]
+        if source == "kick":
+            sub_cmd += ["--add-headers", "User-Agent:Mozilla/5.0", "--add-headers", "Referer:https://kick.com/"]
 
         sub_result = subprocess.run(sub_cmd, capture_output=True, text=True, timeout=60)
         sub_files = list(tmp.glob("*.vtt"))
 
         if sub_result.returncode == 0 and sub_files:
-            # Parse VTT to plain timestamped text
             vtt_text = sub_files[0].read_text(encoding="utf-8", errors="replace")
             transcript = parse_vtt(vtt_text)
+            info = get_video_info(url)
+            return {"transcript": transcript, "title": info.get("title",""), "method": "subtitles"}
 
-            # Get title
-            title = ""
-            try:
-                info_cmd = ["yt-dlp", url, "--dump-json", "--quiet"]
-                info = subprocess.run(info_cmd, capture_output=True, text=True, timeout=30)
-                if info.returncode == 0:
-                    title = json.loads(info.stdout).get("title", "")
-            except Exception:
-                pass
-
-            print(f"[extract] subtitles found — {len(transcript)} chars")
-            return {"transcript": transcript, "title": title, "method": "subtitles"}
-
-        # ── Try 2: Audio-only download + Groq Whisper ─────────────────────────
-        print(f"[extract] no subtitles found, trying audio-only...")
-        audio_path = tmp / "audio.mp3"
-        audio_cmd = [
-            "yt-dlp", url,
-            "-o", str(tmp / "audio_raw.%(ext)s"),
-            "-x", "--audio-format", "mp3", "--audio-quality", "64K",
-            "--no-playlist", "--quiet",
-        ]
-        if source == "twitch":
-            audio_cmd += ["-f", "audio_only/best"]
-
-        audio_result = subprocess.run(audio_cmd, capture_output=True, text=True, timeout=120)
+        # Fall back to audio + Groq Whisper
+        audio_result = download_audio(url, tmp, source)
         audio_files = list(tmp.glob("audio_raw.*"))
+        if not audio_files:
+            return {"error": "Could not extract audio"}, 400
 
-        if audio_result.returncode != 0 or not audio_files:
-            return {"error": f"Could not extract audio from {url}", "method": "failed"}, 400
+        audio_path = tmp / "audio.mp3"
+        convert_to_mp3(audio_files[0], audio_path)
+        audio_path = compress_audio_if_needed(audio_path, tmp)
 
-        # Convert to mp3
-        subprocess.run([
-            "ffmpeg", "-i", str(audio_files[0]),
-            "-ar", "16000", "-ac", "1", "-b:a", "64k",
-            str(audio_path), "-y", "-loglevel", "error"
-        ], timeout=60)
-
-        if not audio_path.exists():
-            return {"error": "Audio conversion failed"}, 500
-
-        # Compress if needed
-        if audio_path.stat().st_size > 24 * 1024 * 1024:
-            compressed = tmp / "audio_small.mp3"
-            subprocess.run([
-                "ffmpeg", "-i", str(audio_path),
-                "-ar", "16000", "-ac", "1", "-b:a", "32k",
-                str(compressed), "-y", "-loglevel", "error"
-            ], timeout=60)
-            if compressed.exists():
-                audio_path = compressed
-
-        groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
-        with open(audio_path, "rb") as f:
-            transcription = groq_client.audio.transcriptions.create(
-                file=(audio_path.name, f),
-                model="whisper-large-v3",
-                response_format="verbose_json",
-                timestamp_granularities=["segment"],
-            )
-
-        segments = transcription.segments or []
-        lines = []
-        for seg in segments:
-            start = seg.get("start", 0)
-            text = seg.get("text", "").strip()
-            h, m, s = int(start // 3600), int((start % 3600) // 60), start % 60
-            lines.append(f"[{h:02d}:{m:02d}:{s:05.2f}] {text}")
-
-        transcript = "\n".join(lines)
-        print(f"[extract] groq whisper done — {len(segments)} segments")
-
-        # Get title
-        title = ""
-        try:
-            info_cmd = ["yt-dlp", url, "--dump-json", "--quiet"]
-            info = subprocess.run(info_cmd, capture_output=True, text=True, timeout=30)
-            if info.returncode == 0:
-                title = json.loads(info.stdout).get("title", "")
-        except Exception:
-            pass
-
-        return {"transcript": transcript, "title": title, "method": "groq_whisper"}
+        transcript = transcribe_with_groq(audio_path, os.environ["GROQ_API_KEY"])
+        info = get_video_info(url)
+        return {"transcript": transcript, "title": info.get("title",""), "method": "groq_whisper"}
 
 
 def parse_vtt(vtt_text: str) -> str:
-    """Convert VTT subtitle format to plain timestamped text."""
-    import re
     lines = vtt_text.split("\n")
-    result = []
-    current_time = ""
-    current_text = []
-
+    result, current_time, current_text = [], "", []
     for line in lines:
         line = line.strip()
-        # Timestamp line like "00:01:23.456 --> 00:01:25.789"
         if "-->" in line:
             if current_text and current_time:
-                clean = " ".join(current_text).strip()
-                # Remove VTT tags like <00:01:23.456><c>text</c>
-                clean = re.sub(r'<[^>]+>', '', clean).strip()
+                clean = re.sub(r'<[^>]+>', '', " ".join(current_text)).strip()
                 if clean:
                     result.append(f"[{current_time}] {clean}")
-            ts = line.split("-->")[0].strip()
-            # Convert HH:MM:SS.mmm to HH:MM:SS
-            current_time = ts[:8] if len(ts) >= 8 else ts
+            current_time = line.split("-->")[0].strip()[:8]
             current_text = []
         elif line and not line.startswith("WEBVTT") and not line.isdigit():
             current_text.append(line)
-
-    # Last segment
     if current_text and current_time:
         clean = re.sub(r'<[^>]+>', '', " ".join(current_text)).strip()
         if clean:
             result.append(f"[{current_time}] {clean}")
-
-    # Deduplicate consecutive identical lines (VTT often repeats)
-    deduped = []
-    prev = ""
+    # Deduplicate
+    deduped, prev = [], ""
     for line in result:
-        text_part = line.split("] ", 1)[-1]
-        if text_part != prev:
+        text = line.split("] ", 1)[-1]
+        if text != prev:
             deduped.append(line)
-            prev = text_part
-
+            prev = text
     return "\n".join(deduped)
+
+
+@app.local_entrypoint()
+def main():
+    print("ClipFinder worker ready. Deploy with: modal deploy worker.py")
