@@ -459,3 +459,175 @@ def start(body: dict):
 @app.local_entrypoint()
 def main():
     print("ClipFinder worker ready. Deploy with: modal deploy worker.py")
+
+
+# ── Subtitle/transcript extraction (no video download) ────────────────────────
+@app.function(image=image, secrets=secrets, timeout=120)
+@modal.fastapi_endpoint(method="POST")
+def extract(body: dict):
+    """Extract transcript from a URL without downloading the video.
+    Uses auto-generated subtitles first, falls back to audio-only Groq Whisper."""
+    import tempfile
+    from pathlib import Path
+    from groq import Groq
+
+    url = body.get("url", "")
+    auth_token = body.get("authToken", "")
+    worker_secret = os.environ.get("WORKER_SECRET", "")
+
+    if worker_secret and auth_token != worker_secret:
+        return {"error": "Unauthorized"}, 401
+
+    if not url:
+        return {"error": "url required"}, 400
+
+    source = detect_source(url)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+
+        # ── Try 1: Auto-generated subtitles (fastest, no download) ───────────
+        sub_cmd = [
+            "yt-dlp", url,
+            "--skip-download",
+            "--write-auto-subs", "--write-subs",
+            "--sub-format", "vtt",
+            "--sub-lang", "en,en-US,en-GB",
+            "-o", str(tmp / "subs"),
+            "--quiet", "--no-warnings",
+        ]
+
+        sub_result = subprocess.run(sub_cmd, capture_output=True, text=True, timeout=60)
+        sub_files = list(tmp.glob("*.vtt"))
+
+        if sub_result.returncode == 0 and sub_files:
+            # Parse VTT to plain timestamped text
+            vtt_text = sub_files[0].read_text(encoding="utf-8", errors="replace")
+            transcript = parse_vtt(vtt_text)
+
+            # Get title
+            title = ""
+            try:
+                info_cmd = ["yt-dlp", url, "--dump-json", "--quiet"]
+                info = subprocess.run(info_cmd, capture_output=True, text=True, timeout=30)
+                if info.returncode == 0:
+                    title = json.loads(info.stdout).get("title", "")
+            except Exception:
+                pass
+
+            print(f"[extract] subtitles found — {len(transcript)} chars")
+            return {"transcript": transcript, "title": title, "method": "subtitles"}
+
+        # ── Try 2: Audio-only download + Groq Whisper ─────────────────────────
+        print(f"[extract] no subtitles found, trying audio-only...")
+        audio_path = tmp / "audio.mp3"
+        audio_cmd = [
+            "yt-dlp", url,
+            "-o", str(tmp / "audio_raw.%(ext)s"),
+            "-x", "--audio-format", "mp3", "--audio-quality", "64K",
+            "--no-playlist", "--quiet",
+        ]
+        if source == "twitch":
+            audio_cmd += ["-f", "audio_only/best"]
+
+        audio_result = subprocess.run(audio_cmd, capture_output=True, text=True, timeout=120)
+        audio_files = list(tmp.glob("audio_raw.*"))
+
+        if audio_result.returncode != 0 or not audio_files:
+            return {"error": f"Could not extract audio from {url}", "method": "failed"}, 400
+
+        # Convert to mp3
+        subprocess.run([
+            "ffmpeg", "-i", str(audio_files[0]),
+            "-ar", "16000", "-ac", "1", "-b:a", "64k",
+            str(audio_path), "-y", "-loglevel", "error"
+        ], timeout=60)
+
+        if not audio_path.exists():
+            return {"error": "Audio conversion failed"}, 500
+
+        # Compress if needed
+        if audio_path.stat().st_size > 24 * 1024 * 1024:
+            compressed = tmp / "audio_small.mp3"
+            subprocess.run([
+                "ffmpeg", "-i", str(audio_path),
+                "-ar", "16000", "-ac", "1", "-b:a", "32k",
+                str(compressed), "-y", "-loglevel", "error"
+            ], timeout=60)
+            if compressed.exists():
+                audio_path = compressed
+
+        groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
+        with open(audio_path, "rb") as f:
+            transcription = groq_client.audio.transcriptions.create(
+                file=(audio_path.name, f),
+                model="whisper-large-v3",
+                response_format="verbose_json",
+                timestamp_granularities=["segment"],
+            )
+
+        segments = transcription.segments or []
+        lines = []
+        for seg in segments:
+            start = seg.get("start", 0)
+            text = seg.get("text", "").strip()
+            h, m, s = int(start // 3600), int((start % 3600) // 60), start % 60
+            lines.append(f"[{h:02d}:{m:02d}:{s:05.2f}] {text}")
+
+        transcript = "\n".join(lines)
+        print(f"[extract] groq whisper done — {len(segments)} segments")
+
+        # Get title
+        title = ""
+        try:
+            info_cmd = ["yt-dlp", url, "--dump-json", "--quiet"]
+            info = subprocess.run(info_cmd, capture_output=True, text=True, timeout=30)
+            if info.returncode == 0:
+                title = json.loads(info.stdout).get("title", "")
+        except Exception:
+            pass
+
+        return {"transcript": transcript, "title": title, "method": "groq_whisper"}
+
+
+def parse_vtt(vtt_text: str) -> str:
+    """Convert VTT subtitle format to plain timestamped text."""
+    import re
+    lines = vtt_text.split("\n")
+    result = []
+    current_time = ""
+    current_text = []
+
+    for line in lines:
+        line = line.strip()
+        # Timestamp line like "00:01:23.456 --> 00:01:25.789"
+        if "-->" in line:
+            if current_text and current_time:
+                clean = " ".join(current_text).strip()
+                # Remove VTT tags like <00:01:23.456><c>text</c>
+                clean = re.sub(r'<[^>]+>', '', clean).strip()
+                if clean:
+                    result.append(f"[{current_time}] {clean}")
+            ts = line.split("-->")[0].strip()
+            # Convert HH:MM:SS.mmm to HH:MM:SS
+            current_time = ts[:8] if len(ts) >= 8 else ts
+            current_text = []
+        elif line and not line.startswith("WEBVTT") and not line.isdigit():
+            current_text.append(line)
+
+    # Last segment
+    if current_text and current_time:
+        clean = re.sub(r'<[^>]+>', '', " ".join(current_text)).strip()
+        if clean:
+            result.append(f"[{current_time}] {clean}")
+
+    # Deduplicate consecutive identical lines (VTT often repeats)
+    deduped = []
+    prev = ""
+    for line in result:
+        text_part = line.split("] ", 1)[-1]
+        if text_part != prev:
+            deduped.append(line)
+            prev = text_part
+
+    return "\n".join(deduped)
