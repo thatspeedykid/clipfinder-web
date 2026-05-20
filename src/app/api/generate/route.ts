@@ -1,105 +1,150 @@
 // src/app/api/generate/route.ts
-// Post Studio generator — creates platform-specific posts for a clip
-// Runs Gemini + Groq in parallel, returns fastest good result
+// Post Studio — uses the real ClipFinder prompts from clipfinder_core.py
+// Generates 3 options per platform, all same tone different angles
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
 
 export const maxDuration = 30
 
-const PLATFORM_PROMPTS: Record<string, (clip: ClipData, tone: string) => string> = {
-  twitter: (clip, tone) => `You are a viral Twitter/X content writer for a drama/streaming clip channel.
-Write a tweet for this clip. ${TONE_INSTRUCTIONS[tone]}
+// ── Tone definitions — direct port from clipfinder_core.py TWEET_TONE_PROMPTS ──
+const TONE_PROMPTS: Record<string, string> = {
+  drama: '🔥 DRAMA ACCOUNT — Tea spiller energy. Shocking, pointed, like a real streaming drama page. Use emojis strategically. Pull receipts.',
+  tea: '☕ TEA MODE — Calm but devastating. Matter-of-fact delivery that makes the drama hit harder. "So apparently..." energy. Understated.',
+  breaking: '📰 BREAKING NEWS — Urgent, journalistic. "BREAKING:" opener. Treat it like actual news. Serious tone, facts first.',
+  hype: '💥 HYPE MODE — Celebrate the moment. Positive energy, get people excited to watch. Use energy words. Make it feel unmissable.',
+  exaggerate: `🤯 EXAGGERATE MODE — Write a dramatic multi-line story that builds line by line. Use this EXACT format:
 
+🚨 [SHOCKING HEADLINE IN CAPS — name the person and the situation] 😳
+[Setup line — what the secret or situation was] 👀
+[Escalation — what triggered it or made it worse] 💔
+[Twist — how things shifted or got more chaotic] 💸🔥
+[Punchline — how wild it ended up] ⚡
+
+Rules: Each line max 12 words. 1-2 emojis at END of each line. Build tension line by line.
+Stay factual to the transcript — just massively dramatize real events.
+Never mean-spirited toward the person — make them the legendary main character.
+All 3 options follow this same format but cover DIFFERENT angles of the same story.
+Hashtags on a separate final line.`,
+}
+
+// ── Platform-specific max chars ──────────────────────────────────────────────
+const PLATFORM_LIMITS: Record<string, number> = {
+  twitter: 280,
+  instagram: 2200,
+  tiktok: 2200,
+  youtube: 500,
+}
+
+// ── Main prompt — port of TWEET_PROMPT from clipfinder_core.py ───────────────
+function buildPrompt(clip: ClipData, tone: string, platform: string): string {
+  const limit = PLATFORM_LIMITS[platform] ?? 280
+  const platformNote = platform === 'twitter'
+    ? `Max ${limit} chars per option.`
+    : platform === 'instagram'
+    ? `Instagram caption. Hook in first line. 8-12 hashtags on last line. Max ${limit} chars.`
+    : platform === 'tiktok'
+    ? `TikTok caption. Punchy, lowercase is fine. 3-5 hashtags. Max 150 chars.`
+    : `YouTube Shorts description. First line is SEO hook. Add call to action. Max ${limit} chars.`
+
+  return `You are a social media writer for @MarsScumbags, a streaming drama/clip channel.
+Read the transcript carefully. Identify WHO is involved, WHAT happened, and the most shocking/quotable moment.
+
+== PEOPLE & CONTEXT ==
 Clip title: ${clip.title}
 Summary: ${clip.summary}
 Speaker: ${clip.speaker || 'unknown'}
-Hook line: ${clip.hook_line || ''}
+${clip.transcript_excerpt ? `\nTranscript excerpt:\n${clip.transcript_excerpt}` : ''}
 
-RULES:
-- Max 260 characters (leave room for a link)
-- No generic phrases like "You won't believe" or "This is crazy"
-- Write like a real person, not a brand
-- Use the actual names from the clip if known
-- End with a cliffhanger or reaction if possible
-- 1-2 relevant emojis max, used naturally not spammed
+== TONE ==
+${TONE_PROMPTS[tone] ?? TONE_PROMPTS.drama}
 
-Return ONLY the tweet text. Nothing else.`,
+== PLATFORM ==
+${platformNote}
 
-  instagram: (clip, tone) => `You are a viral Instagram caption writer for a drama/streaming clip page.
-Write an Instagram caption for this clip. ${TONE_INSTRUCTIONS[tone]}
+== YOUR JOB ==
+Write 3 posts ALL in the same tone above. Each post covers the same event but from a DIFFERENT ANGLE:
 
-Clip title: ${clip.title}
-Summary: ${clip.summary}
-Speaker: ${clip.speaker || 'unknown'}
+OPTION 1 — HOT TAKE
+Your punchy opinion or reaction to what happened. Lead with the most shocking element.
+Structure: Strong opener (can be all caps or shocking statement) → context sentence → spicy take or quote → hashtags
+Must reference a SPECIFIC moment or quote from the transcript.
 
-RULES:
-- 150-300 characters for the main caption
-- Add 8-12 relevant hashtags on a new line at the end
-- Hook in the first line — make them stop scrolling
-- Use line breaks for readability
-- Emojis used naturally, not every word
+OPTION 2 — PULL QUOTE
+Lead with an actual direct quote or close paraphrase from the transcript (in quotes), then react to it.
+Structure: "Quote from transcript" → your reaction/commentary → hashtags
+The quote must be real and specific — not made up.
 
-Return ONLY the caption with hashtags. Nothing else.`,
+OPTION 3 — ANNOUNCEMENT HOOK
+Frame it like breaking news or a must-see moment. Make people feel like they NEED to watch the clip.
+Structure: Hook that creates urgency or curiosity → what happened → call to action or cliffhanger → hashtags
+No clickbait that doesn't deliver — be specific about what happens.
 
-  tiktok: (clip, tone) => `You are a viral TikTok caption writer for a drama/streaming clip account.
-Write a TikTok caption for this clip. ${TONE_INSTRUCTIONS[tone]}
+== OUTPUT FORMAT ==
+Write EXACTLY this — no preamble, no labels other than OPTION 1/2/3:
 
-Clip title: ${clip.title}
-Summary: ${clip.summary}
+OPTION 1
+[post text]
 
-RULES:
-- Max 150 characters
-- Punchy, conversational, lowercase is fine
-- 3-5 hashtags at the end (mix trending + niche)
-- Make it feel like a real person posted it, not a brand
+OPTION 2
+[post text]
 
-Return ONLY the caption. Nothing else.`,
+OPTION 3
+[post text]
 
-  youtube: (clip, tone) => `You are a YouTube Shorts description writer for a drama/streaming clip channel.
-Write a YouTube Shorts description for this clip. ${TONE_INSTRUCTIONS[tone]}
+== HASHTAG RULES ==
+- Use ACTUAL NAMES from the transcript/context ONLY — never invent or assume names not mentioned
+- Use platform only if relevant (#Kick #Twitch #YouTube)
+- Use drama type if it fits (#Exposed #Drama #Beef #Leaked #Scandal)
+- NEVER use #gaming #gamingscandal #gamer #streamer unless literally about gameplay
+- Each option gets its OWN hashtags matching what THAT post says
+- 3-5 hashtags max per option
 
-Clip title: ${clip.title}
-Summary: ${clip.summary}
-Speaker: ${clip.speaker || 'unknown'}
+== RULES ==
+- All 3 options MUST be in the same tone — do NOT switch styles between options
+- Each option must feel different in angle and structure but same energy
+- Use REAL quotes and REAL moments — never make things up
+- No preamble before OPTION 1 — start writing immediately`
+}
 
-RULES:
-- First line is the hook (shows in search) — max 100 chars
-- 2-3 sentences of context below
-- Add 5-8 hashtags at the end
-- Include a call to action (subscribe, follow, etc.)
-
-Return ONLY the description. Nothing else.`,
-
-  hook: (clip, _tone) => `You are an expert at writing viral hooks for social media clips.
+// ── Hook line prompt ──────────────────────────────────────────────────────────
+function buildHookPrompt(clip: ClipData): string {
+  return `You are an expert at writing viral hooks for social media clips.
 Pull the single most quotable, shocking, or funny moment from this clip as a standalone hook line.
 
 Clip title: ${clip.title}
 Summary: ${clip.summary}
-Transcript excerpt: ${clip.transcript_excerpt || clip.summary}
+${clip.transcript_excerpt ? `Transcript excerpt:\n${clip.transcript_excerpt}` : ''}
 
 RULES:
 - 1 sentence max, under 100 characters
 - Must be something someone actually said OR a punchy description of the moment
-- If it's a quote, use quotation marks
+- If it's a direct quote from the transcript, wrap it in quotation marks
 - No emojis, no hashtags — just the raw line
 
-Return ONLY the hook line. Nothing else.`,
-}
-
-const TONE_INSTRUCTIONS: Record<string, string> = {
-  drama:   'Tone: Drama. Lean into the conflict, the betrayal, the shocking moment. Make it feel like the biggest thing that happened today.',
-  hype:    'Tone: Hype. High energy, excited, make people feel like they NEED to watch this right now.',
-  neutral: 'Tone: Neutral. Just state what happened clearly and compellingly. Let the moment speak for itself.',
-  funny:   'Tone: Funny. Lean into the absurdity or comedy of the situation. Dry humor works well here.',
+Return ONLY the hook line. Nothing else.`
 }
 
 type ClipData = {
   title: string
   summary: string
   speaker?: string
-  hook_line?: string
   transcript_excerpt?: string
+}
+
+// ── Parse the OPTION 1/2/3 format from AI response ───────────────────────────
+function parseOptions(raw: string): string[] {
+  const options: string[] = []
+  const parts = raw.split(/^OPTION \d+\s*$/m).filter(p => p.trim())
+  for (const part of parts) {
+    const cleaned = part.trim()
+    if (cleaned) options.push(cleaned)
+  }
+  // Fallback: if parsing fails, return the whole thing as one option
+  if (options.length === 0 && raw.trim()) {
+    return [raw.trim()]
+  }
+  return options.slice(0, 3)
 }
 
 async function callGroq(prompt: string): Promise<string> {
@@ -109,8 +154,8 @@ async function callGroq(prompt: string): Promise<string> {
     body: JSON.stringify({
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 500,
-      temperature: 0.7,
+      max_tokens: 800,
+      temperature: 0.8,
     }),
   })
   if (!res.ok) throw new Error(`Groq error: ${res.status}`)
@@ -125,7 +170,7 @@ async function callGemini(prompt: string): Promise<string> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.7, maxOutputTokens: 500 },
+      generationConfig: { temperature: 0.8, maxOutputTokens: 800 },
     }),
   })
   if (!res.ok) throw new Error(`Gemini error: ${res.status}`)
@@ -138,7 +183,6 @@ async function generate(prompt: string): Promise<string> {
     callGemini(prompt),
     callGroq(prompt),
   ])
-  // Prefer Gemini, fall back to Groq
   if (geminiResult.status === 'fulfilled' && geminiResult.value) return geminiResult.value
   if (groqResult.status === 'fulfilled' && groqResult.value) return groqResult.value
   throw new Error('All AI providers failed')
@@ -154,9 +198,12 @@ export async function POST(req: NextRequest) {
     if (error || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const body = await req.json()
-    const { clipId, platform = 'twitter', tone = 'drama', regenerate = false } = body
-
+    const { clipId, platform = 'twitter', tone = 'drama' } = body
     if (!clipId) return NextResponse.json({ error: 'clipId required' }, { status: 400 })
+
+    // Validate tone and platform
+    if (!TONE_PROMPTS[tone]) return NextResponse.json({ error: `Unknown tone: ${tone}` }, { status: 400 })
+    if (!PLATFORM_LIMITS[platform]) return NextResponse.json({ error: `Unknown platform: ${platform}` }, { status: 400 })
 
     // Get clip data
     const { data: clip } = await supabase
@@ -177,17 +224,19 @@ export async function POST(req: NextRequest) {
 
     let transcriptExcerpt = ''
     if (job?.transcript) {
-      // Pull lines within the clip's time range
       const lines = job.transcript.split('\n')
       const startSec = tsToSeconds(clip.start_ts)
       const endSec = tsToSeconds(clip.end_ts)
-      const relevant = lines.filter(line => {
+      const relevant = lines.filter((line: string) => {
         const match = line.match(/\[(\d{2}):(\d{2}):(\d{2})/)
         if (!match) return false
         const lineSec = parseInt(match[1]) * 3600 + parseInt(match[2]) * 60 + parseInt(match[3])
         return lineSec >= startSec && lineSec <= endSec
       })
-      transcriptExcerpt = relevant.slice(0, 20).join('\n').replace(/\[\d{2}:\d{2}:\d{2}\.\d{2}\] /g, '')
+      transcriptExcerpt = relevant
+        .slice(0, 30)
+        .join('\n')
+        .replace(/\[\d{2}:\d{2}:\d{2}\.\d{2}\] /g, '')
     }
 
     const clipData: ClipData = {
@@ -197,27 +246,28 @@ export async function POST(req: NextRequest) {
       transcript_excerpt: transcriptExcerpt,
     }
 
-    // Generate hook line first if not twitter (used in other prompts)
-    let hookLine = ''
-    if (platform !== 'hook') {
-      try {
-        hookLine = await generate(PLATFORM_PROMPTS.hook(clipData, tone))
-        clipData.hook_line = hookLine
-      } catch { /* hook generation failed, continue without it */ }
+    // Run hook + main generation in parallel
+    const [hookResult, mainResult] = await Promise.allSettled([
+      generate(buildHookPrompt(clipData)),
+      generate(buildPrompt(clipData, tone, platform)),
+    ])
+
+    const hookLine = hookResult.status === 'fulfilled' ? hookResult.value : ''
+    const mainRaw = mainResult.status === 'fulfilled' ? mainResult.value : ''
+
+    if (!mainRaw) {
+      return NextResponse.json({ error: 'Generation failed' }, { status: 500 })
     }
 
-    // Generate the requested platform post
-    const promptFn = PLATFORM_PROMPTS[platform]
-    if (!promptFn) return NextResponse.json({ error: `Unknown platform: ${platform}` }, { status: 400 })
-
-    const generated = await generate(promptFn(clipData, tone))
+    const options = parseOptions(mainRaw)
 
     return NextResponse.json({
       success: true,
       platform,
       tone,
-      content: generated,
-      hook_line: hookLine || generated,
+      options,        // array of 3 post options
+      hook_line: hookLine,
+      raw: mainRaw,  // full raw output for debugging
     })
 
   } catch (err) {

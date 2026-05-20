@@ -13,11 +13,11 @@ type Quota = { used: number; limit: number; allowed: boolean }
 
 type PostStudioState = {
   platform: 'twitter' | 'instagram' | 'tiktok' | 'youtube'
-  tone: 'drama' | 'hype' | 'neutral' | 'funny'
-  content: string
+  tone: 'drama' | 'tea' | 'breaking' | 'hype' | 'exaggerate'
+  options: string[]
   hook: string
   generating: boolean
-  copied: boolean
+  copied: number | null  // index of which option was copied
 }
 
 const PLATFORMS = [
@@ -28,10 +28,11 @@ const PLATFORMS = [
 ] as const
 
 const TONES = [
-  { key: 'drama', label: 'Drama' },
-  { key: 'hype', label: 'Hype' },
-  { key: 'neutral', label: 'Neutral' },
-  { key: 'funny', label: 'Funny' },
+  { key: 'drama', label: '🔥 Drama' },
+  { key: 'tea', label: '☕ Tea' },
+  { key: 'breaking', label: '📰 Breaking' },
+  { key: 'hype', label: '💥 Hype' },
+  { key: 'exaggerate', label: '🤯 Exaggerate' },
 ] as const
 
 function detectSource(url: string): string {
@@ -134,8 +135,8 @@ export default function DashboardPage() {
   }
 
   async function generatePost(clipId: string) {
-    const studio = studios[clipId] ?? { platform: 'twitter', tone: 'drama', content: '', hook: '', generating: false, copied: false }
-    setStudios(prev => ({ ...prev, [clipId]: { ...studio, generating: true, content: '', hook: '' } }))
+    const studio = studios[clipId] ?? { platform: 'twitter', tone: 'drama', options: [], hook: '', generating: false, copied: null }
+    setStudios(prev => ({ ...prev, [clipId]: { ...studio, generating: true, options: [], hook: '' } }))
 
     try {
       const res = await fetch('/api/generate', {
@@ -146,7 +147,7 @@ export default function DashboardPage() {
       const data = await res.json()
       setStudios(prev => ({
         ...prev,
-        [clipId]: { ...prev[clipId], generating: false, content: data.content ?? '', hook: data.hook_line ?? '' }
+        [clipId]: { ...prev[clipId], generating: false, options: data.options ?? [], hook: data.hook_line ?? '' }
       }))
     } catch {
       setStudios(prev => ({ ...prev, [clipId]: { ...prev[clipId], generating: false } }))
@@ -154,14 +155,19 @@ export default function DashboardPage() {
   }
 
   function updateStudio(clipId: string, updates: Partial<PostStudioState>) {
-    setStudios(prev => ({ ...prev, [clipId]: { ...(prev[clipId] ?? { platform: 'twitter', tone: 'drama', content: '', hook: '', generating: false, copied: false }), ...updates } })
-    )
+    setStudios(prev => ({
+      ...prev,
+      [clipId]: {
+        ...(prev[clipId] ?? { platform: 'twitter', tone: 'drama', options: [], hook: '', generating: false, copied: null }),
+        ...updates
+      }
+    }))
   }
 
-  async function copyToClipboard(clipId: string, text: string) {
+  async function copyToClipboard(clipId: string, text: string, index: number) {
     await navigator.clipboard.writeText(text)
-    updateStudio(clipId, { copied: true })
-    setTimeout(() => updateStudio(clipId, { copied: false }), 2000)
+    updateStudio(clipId, { copied: index })
+    setTimeout(() => updateStudio(clipId, { copied: null }), 2000)
   }
 
   async function signOut() { await supabase.auth.signOut(); router.replace('/') }
@@ -269,7 +275,6 @@ export default function DashboardPage() {
               {clips.map(clip => {
                 const studio = studios[clip.id] ?? { platform: 'twitter', tone: 'drama', content: '', hook: '', generating: false, copied: false }
                 const isOpen = openStudio === clip.id
-                const charLimit = PLATFORMS.find(p => p.key === studio.platform)?.limit ?? 280
 
                 return (
                   <div key={clip.id} className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden">
@@ -331,41 +336,38 @@ export default function DashboardPage() {
                         </div>
 
                         {/* Generate button */}
-                        {!studio.content && (
+                        {studio.options.length === 0 && (
                           <button
                             onClick={() => generatePost(clip.id)}
                             disabled={studio.generating}
                             className="w-full py-2.5 bg-[#FF6B00] text-white text-sm font-medium rounded-xl hover:bg-[#e55f00] disabled:opacity-50 mb-3">
-                            {studio.generating ? '✨ Generating...' : '✨ Generate post'}
+                            {studio.generating ? '✨ Generating 3 options...' : '✨ Generate posts'}
                           </button>
                         )}
 
-                        {/* Generated content */}
-                        {studio.content && (
+                        {/* 3 generated options */}
+                        {studio.options.length > 0 && (
                           <div className="space-y-3">
-                            <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-                              <textarea
-                                value={studio.content}
-                                onChange={e => updateStudio(clip.id, { content: e.target.value })}
-                                rows={5}
-                                className="w-full bg-transparent text-sm text-white/80 resize-none focus:outline-none"
-                              />
-                              <div className="flex items-center justify-between mt-2">
-                                <span className={`text-xs ${studio.content.length > charLimit ? 'text-red-400' : 'text-white/30'}`}>
-                                  {studio.content.length}/{charLimit}
-                                </span>
+                            {studio.options.map((option, i) => (
+                              <div key={i} className="bg-white/5 border border-white/10 rounded-xl p-4">
+                                <div className="flex items-center justify-between mb-2">
+                                  <span className="text-xs text-white/40 font-medium">
+                                    {i === 0 ? '🔥 Hot Take' : i === 1 ? '💬 Pull Quote' : '📣 Announcement'}
+                                  </span>
+                                  <span className="text-xs text-white/20">{option.length}/{PLATFORMS.find(p => p.key === studio.platform)?.limit ?? 280}</span>
+                                </div>
+                                <p className="text-sm text-white/80 whitespace-pre-wrap leading-relaxed">{option}</p>
+                                <button
+                                  onClick={() => copyToClipboard(clip.id, option, i)}
+                                  className={`mt-3 w-full text-xs py-2 rounded-lg transition-colors ${studio.copied === i ? 'bg-green-500/20 text-green-400' : 'bg-white/10 text-white/50 hover:bg-white/20'}`}>
+                                  {studio.copied === i ? '✓ Copied!' : '📋 Copy'}
+                                </button>
                               </div>
-                            </div>
-                            <div className="flex gap-2">
-                              <button onClick={() => copyToClipboard(clip.id, studio.content)}
-                                className={`flex-1 text-xs py-2 rounded-xl transition-colors ${studio.copied ? 'bg-green-500/20 text-green-400' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}>
-                                {studio.copied ? '✓ Copied!' : '📋 Copy'}
-                              </button>
-                              <button onClick={() => generatePost(clip.id)} disabled={studio.generating}
-                                className="flex-1 text-xs py-2 rounded-xl bg-white/5 text-white/40 border border-white/10 hover:bg-white/10 disabled:opacity-50">
-                                {studio.generating ? 'Regenerating...' : '↺ Regenerate'}
-                              </button>
-                            </div>
+                            ))}
+                            <button onClick={() => generatePost(clip.id)} disabled={studio.generating}
+                              className="w-full text-xs py-2 rounded-xl bg-white/5 text-white/40 border border-white/10 hover:bg-white/10 disabled:opacity-50">
+                              {studio.generating ? 'Regenerating...' : '↺ Regenerate all 3'}
+                            </button>
                           </div>
                         )}
                       </div>
