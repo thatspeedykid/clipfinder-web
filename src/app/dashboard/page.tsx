@@ -192,8 +192,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <Nav />
-
       <div className="flex-1 max-w-3xl mx-auto w-full px-4 py-10">
 
         {/* URL Input */}

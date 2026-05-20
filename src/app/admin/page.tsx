@@ -411,9 +411,9 @@ export default function AdminPage() {
                         </div>
                         <button
                           onClick={() => toggleFlag(flag.key, !flag.enabled)}
-                          className={`relative w-12 h-6 rounded-full transition-colors flex-shrink-0 mt-0.5 ${flag.enabled ? 'bg-[#FF6B00]' : 'bg-white/20'}`}
+                          className={`relative inline-flex w-11 h-6 rounded-full transition-colors flex-shrink-0 mt-0.5 focus:outline-none ${flag.enabled ? 'bg-[#FF6B00]' : 'bg-white/20'}`}
                           aria-label={`Toggle ${flag.label}`}>
-                          <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${flag.enabled ? 'translate-x-7' : 'translate-x-1'}`} />
+                          <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 ${flag.enabled ? 'translate-x-5' : 'translate-x-0'}`} />
                         </button>
                       </div>
                     </div>
