@@ -110,15 +110,36 @@ export default function DashboardPage() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) { router.replace('/login'); return }
 
-    // Create job via Modal worker
-    const res = await fetch(process.env.NEXT_PUBLIC_MODAL_WORKER_URL + '/start', {
+    // First create the job record in Supabase
+    const jobRes = await fetch('/api/jobs', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${session.access_token}`,
-        'X-App-Key': process.env.NEXT_PUBLIC_APP_KEY ?? '',
       },
-      body: JSON.stringify({ url, mode, userId: user?.id }),
+      body: JSON.stringify({ source_url: url, mode }),
+    })
+    const jobData = await jobRes.json()
+    if (!jobRes.ok) {
+      setError(jobData.error ?? 'Failed to create job')
+      setSubmitting(false)
+      return
+    }
+    const jobId = jobData.jobId
+
+    // Then call Modal worker with the job ID
+    const res = await fetch(process.env.NEXT_PUBLIC_MODAL_WORKER_URL!, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        jobId,
+        url,
+        mode,
+        userId: user?.id,
+        authToken: process.env.NEXT_PUBLIC_WORKER_SECRET ?? '',
+      }),
     })
 
     const data = await res.json()
@@ -129,7 +150,7 @@ export default function DashboardPage() {
       return
     }
 
-    setJob({ id: data.jobId, status: 'queued', progress: 0, progress_msg: 'Starting...' })
+    setJob({ id: jobId, status: 'queued', progress: 0, progress_msg: 'Starting...' })
   }
 
   async function signOut() {
