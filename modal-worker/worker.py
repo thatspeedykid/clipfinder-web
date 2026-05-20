@@ -109,13 +109,17 @@ def build_ydl_cmd(url, output_path, cookies_file=None, sections=None, source="un
     ]
 
     # Quality — 720p max to save bandwidth
-    if source == "twitter":
-        cmd += ["-f", "best[height<=720]/best"]
-    elif source == "twitch":
-        # Twitch clips work fine, VODs need OAuth
+    if source in ("twitter", "twitch", "kick"):
         cmd += ["-f", "best[height<=720]/best"]
     else:
         cmd += ["-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best"]
+
+    # Kick-specific: use the direct stream URL approach
+    if source == "kick":
+        cmd += [
+            "--extractor-retries", "3",
+            "--fragment-retries", "3",
+        ]
 
     # No-download mode: only pull specific sections
     if sections:
@@ -125,9 +129,6 @@ def build_ydl_cmd(url, output_path, cookies_file=None, sections=None, source="un
     # YouTube cookies bypass
     if cookies_file and os.path.exists(cookies_file):
         cmd += ["--cookies", cookies_file]
-    elif source == "youtube":
-        # Try without cookies first, fall back is handled in error
-        pass
 
     return cmd
 

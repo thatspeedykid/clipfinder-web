@@ -397,20 +397,25 @@ export default function AdminPage() {
                 <h3 className="text-xs font-medium text-white/40 uppercase tracking-wider mb-2">{group.replace('_', ' ')}</h3>
                 <div className="space-y-2">
                   {groupFlags.map(flag => (
-                    <div key={flag.key} className={`bg-white/5 border rounded-xl p-4 flex items-center justify-between gap-4 ${flag.enabled ? 'border-white/10' : 'border-white/5 opacity-60'}`}>
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <p className="text-sm font-medium">{flag.label}</p>
-                          {flag.enabled && <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">on</span>}
+                    <div key={flag.key} className={`bg-white/5 border rounded-xl p-4 ${flag.enabled ? 'border-white/10' : 'border-white/5 opacity-70'}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-sm font-medium">{flag.label}</p>
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${flag.enabled ? 'bg-green-500/20 text-green-400' : 'bg-white/5 text-white/30'}`}>
+                              {flag.enabled ? 'on' : 'off'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-white/40 mt-1 leading-relaxed">{flag.description}</p>
+                          <p className="text-xs text-white/20 font-mono mt-1">{flag.key}</p>
                         </div>
-                        <p className="text-xs text-white/40 mt-0.5">{flag.description}</p>
-                        <p className="text-xs text-white/20 font-mono">{flag.key}</p>
+                        <button
+                          onClick={() => toggleFlag(flag.key, !flag.enabled)}
+                          className={`relative w-12 h-6 rounded-full transition-colors flex-shrink-0 mt-0.5 ${flag.enabled ? 'bg-[#FF6B00]' : 'bg-white/20'}`}
+                          aria-label={`Toggle ${flag.label}`}>
+                          <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${flag.enabled ? 'translate-x-7' : 'translate-x-1'}`} />
+                        </button>
                       </div>
-                      <button
-                        onClick={() => toggleFlag(flag.key, !flag.enabled)}
-                        className={`relative w-12 h-6 rounded-full transition-colors flex-shrink-0 ${flag.enabled ? 'bg-[#FF6B00]' : 'bg-white/10'}`}>
-                        <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${flag.enabled ? 'translate-x-7' : 'translate-x-1'}`} />
-                      </button>
                     </div>
                   ))}
                 </div>
