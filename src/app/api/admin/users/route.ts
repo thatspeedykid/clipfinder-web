@@ -40,3 +40,28 @@ export async function PATCH(req: NextRequest) {
   if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 })
   return NextResponse.json({ success: true })
 }
+
+// Admin password reset for any user
+export async function PUT(req: NextRequest) {
+  const { error } = await requireAdmin(req)
+  if (error) return error
+
+  const supabase = createAdminClient()
+  const { userId, newPassword, remove2fa } = await req.json()
+  if (!userId) return NextResponse.json({ error: 'userId required' }, { status: 400 })
+
+  if (newPassword) {
+    const { error: e } = await supabase.auth.admin.updateUserById(userId, { password: newPassword })
+    if (e) return NextResponse.json({ error: e.message }, { status: 500 })
+  }
+
+  if (remove2fa) {
+    // Get all MFA factors for user and unenroll them
+    const { data: factors } = await supabase.auth.admin.mfa.listFactors({ userId })
+    for (const factor of factors?.totp ?? []) {
+      await supabase.auth.admin.mfa.deleteFactor({ userId, id: factor.id })
+    }
+  }
+
+  return NextResponse.json({ success: true })
+}

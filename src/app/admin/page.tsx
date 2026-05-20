@@ -38,6 +38,9 @@ export default function AdminPage() {
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [saving, setSaving] = useState(false)
+  const [passwordModal, setPasswordModal] = useState<{ userId: string; email: string } | null>(null)
+  const [newPassword, setNewPassword] = useState('')
+  const [settingPassword, setSettingPassword] = useState(false)
   const [banModal, setBanModal] = useState<{ user: User } | null>(null)
   const [banReason, setBanReason] = useState('')
   const [newIp, setNewIp] = useState('')
@@ -143,6 +146,19 @@ export default function AdminPage() {
     loadUsers(); toast(is_admin ? 'Admin granted' : 'Admin removed')
   }
 
+  async function setUserPassword(userId: string) {
+    if (!newPassword || newPassword.length < 8) { toast('Password must be at least 8 chars'); return }
+    setSettingPassword(true)
+    await authFetch('/api/admin/users', { method: 'PUT', body: JSON.stringify({ userId, newPassword }) })
+    setSettingPassword(false); setPasswordModal(null); setNewPassword('')
+    toast('Password updated')
+  }
+
+  async function remove2FA(userId: string) {
+    await authFetch('/api/admin/users', { method: 'PUT', body: JSON.stringify({ userId, remove2fa: true }) })
+    toast('2FA removed'); loadUsers()
+  }
+
   async function banUser(userId: string, reason: string) {
     await authFetch('/api/admin/ban', { method: 'POST', body: JSON.stringify({ action: 'ban_user', userId, reason }) })
     setBanModal(null); setBanReason(''); loadUsers(); toast('User banned')
@@ -184,6 +200,27 @@ export default function AdminPage() {
       {toastMsg && (
         <div className="fixed top-4 right-4 z-50 bg-[#FF6B00] text-white text-sm px-4 py-2 rounded-xl shadow-lg">
           {toastMsg}
+        </div>
+      )}
+
+      {/* Password modal */}
+      {passwordModal && (
+        <div className="fixed inset-0 bg-black/70 z-40 flex items-center justify-center p-4">
+          <div className="bg-[#1a1a1a] border border-white/10 rounded-2xl p-6 w-full max-w-md">
+            <h3 className="font-medium mb-1">Set password for {passwordModal.email}</h3>
+            <p className="text-white/40 text-xs mb-4">This will override their current password immediately.</p>
+            <input type="password" placeholder="New password (min 8 chars)" value={newPassword}
+              onChange={e => setNewPassword(e.target.value)} minLength={8}
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-[#FF6B00] mb-4" />
+            <div className="flex gap-3">
+              <button onClick={() => setUserPassword(passwordModal.userId)} disabled={settingPassword || newPassword.length < 8}
+                className="flex-1 bg-[#FF6B00] text-white text-sm font-medium py-2 rounded-xl disabled:opacity-50">
+                {settingPassword ? 'Setting...' : 'Set password'}
+              </button>
+              <button onClick={() => { setPasswordModal(null); setNewPassword('') }}
+                className="flex-1 bg-white/10 text-white/60 text-sm py-2 rounded-xl">Cancel</button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -328,6 +365,14 @@ export default function AdminPage() {
                       ? <button onClick={() => unbanUser(user.id)} className="text-xs px-2 py-1.5 rounded-lg bg-green-500/10 border border-green-500/20 text-green-400">Unban</button>
                       : <button onClick={() => setBanModal({ user })} className="text-xs px-2 py-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400">Ban</button>
                     }
+                    <button onClick={() => setPasswordModal({ userId: user.id, email: user.email })}
+                      className="text-xs px-2 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400">
+                      🔑 Password
+                    </button>
+                    <button onClick={() => remove2FA(user.id)}
+                      className="text-xs px-2 py-1.5 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-yellow-400">
+                      Remove 2FA
+                    </button>
                     <button onClick={() => deleteUser(user.id)} className="text-xs px-2 py-1.5 rounded-lg bg-red-900/20 border border-red-900/30 text-red-500">Delete</button>
                   </div>
                 </div>
