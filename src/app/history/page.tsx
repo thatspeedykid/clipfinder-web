@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import Nav from '@/components/Nav'
 
 type Job = {
   id: string
@@ -49,13 +50,7 @@ export default function HistoryPage() {
 
   return (
     <main className="min-h-screen flex flex-col bg-[#0f0f0f] text-white">
-      <nav className="flex items-center justify-between px-6 py-4 border-b border-white/10">
-        <Link href="/dashboard" className="flex items-center gap-1">
-          <span className="text-[#FF6B00] font-bold text-lg">CLIP</span>
-          <span className="font-bold text-lg">FINDER</span>
-        </Link>
-        <Link href="/dashboard" className="text-xs text-white/40 hover:text-white">← Dashboard</Link>
-      </nav>
+      <Nav />
 
       <div className="flex-1 max-w-3xl mx-auto w-full px-4 py-10">
         <h1 className="text-xl font-semibold mb-6">Job history</h1>

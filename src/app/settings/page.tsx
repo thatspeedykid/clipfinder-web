@@ -5,6 +5,7 @@ import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import Nav from '@/components/Nav'
 
 export default function SettingsPage() {
   const router = useRouter()
@@ -119,16 +120,7 @@ export default function SettingsPage() {
 
   return (
     <main className="min-h-screen flex flex-col bg-[#0f0f0f] text-white">
-      <nav className="flex items-center justify-between px-6 py-4 border-b border-white/10">
-        <Link href="/dashboard" className="flex items-center gap-1">
-          <span className="text-[#FF6B00] font-bold text-lg">CLIP</span>
-          <span className="font-bold text-lg">FINDER</span>
-        </Link>
-        <div className="flex items-center gap-3">
-          <Link href="/dashboard" className="text-xs text-white/40 hover:text-white">← Dashboard</Link>
-          <button onClick={signOut} className="text-xs text-white/30 hover:text-white">Sign out</button>
-        </div>
-      </nav>
+      <Nav />
 
       {toast && (
         <div className={`fixed top-4 right-4 z-50 text-white text-sm px-4 py-2 rounded-xl shadow-lg ${toastType === 'error' ? 'bg-red-500' : 'bg-[#FF6B00]'}`}>
