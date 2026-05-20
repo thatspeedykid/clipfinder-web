@@ -21,12 +21,17 @@ export async function checkQuota(userId: string): Promise<{
 
   const { data: profile, error } = await supabase
     .from('profiles')
-    .select('tier, clips_today, clips_reset_at')
+    .select('tier, clips_today, clips_reset_at, is_admin')
     .eq('id', userId)
     .single()
 
   if (error || !profile) {
     return { allowed: false, used: 0, limit: 0, tier: 'free', message: 'Profile not found' }
+  }
+
+  // Admins have no limits
+  if (profile.is_admin) {
+    return { allowed: true, used: 0, limit: 999999, tier: 'agency' }
   }
 
   const tier = (profile.tier as Tier) ?? 'free'
