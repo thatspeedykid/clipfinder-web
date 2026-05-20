@@ -1,0 +1,41 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "next build",
+  "devCommand": "next dev",
+  "installCommand": "npm install",
+  "functions": {
+    "src/app/api/analyze/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/transcribe/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/webhook/route.ts": {
+      "maxDuration": 10
+    }
+  },
+  "regions": ["iad1"],
+  "env": [
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "GROQ_API_KEY",
+    "GEMINI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "UPSTASH_REDIS_REST_URL",
+    "UPSTASH_REDIS_REST_TOKEN",
+    "CLOUDFLARE_R2_ACCOUNT_ID",
+    "CLOUDFLARE_R2_ACCESS_KEY_ID",
+    "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+    "CLOUDFLARE_R2_BUCKET_NAME",
+    "CLOUDFLARE_R2_PUBLIC_URL",
+    "MODAL_WORKER_URL",
+    "MODAL_API_KEY",
+    "LEMONSQUEEZY_API_KEY",
+    "LEMONSQUEEZY_STORE_ID",
+    "LEMONSQUEEZY_WEBHOOK_SECRET",
+    "LEMONSQUEEZY_PRO_VARIANT_ID",
+    "LEMONSQUEEZY_AGENCY_VARIANT_ID",
+    "NEXT_PUBLIC_APP_URL"
+  ]
+}
