@@ -33,7 +33,23 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function GET(req: NextRequest) {
+export async function DELETE(req: NextRequest) {
+  try {
+    const supabase = createAdminClient()
+    const authHeader = req.headers.get('authorization')
+    if (!authHeader) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const token = authHeader.replace('Bearer ', '')
+    const { data: { user }, error } = await supabase.auth.getUser(token)
+    if (error || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+    await supabase.from('user_secrets').delete().eq('user_id', user.id)
+    await supabase.from('profiles').update({ yt_cookie_saved_at: null }).eq('id', user.id)
+
+    return NextResponse.json({ success: true })
+  } catch (err) {
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}
   try {
     const supabase = createAdminClient()
     const authHeader = req.headers.get('authorization')

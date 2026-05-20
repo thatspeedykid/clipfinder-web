@@ -192,21 +192,22 @@ export default function DashboardPage() {
 
       {/* Nav */}
       <nav className="flex items-center justify-between px-6 py-4 border-b border-white/10">
-        <Link href="/" className="flex items-center gap-1">
+        <Link href="/" className="flex items-center gap-1 flex-shrink-0">
           <span className="text-[#FF6B00] font-bold text-lg">CLIP</span>
           <span className="font-bold text-lg">FINDER</span>
         </Link>
-        <div className="flex items-center gap-3">
-          {profile && <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${tierColor}`}>{profile.tier.toUpperCase()}</span>}
-          {quota && <span className="text-xs text-white/40 hidden sm:block">{quota.used}/{quota.limit} clips</span>}
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {profile && <span className={`text-xs font-medium px-2 py-1 rounded-full ${tierColor}`}>{profile.tier.toUpperCase()}</span>}
+          {quota && <span className="text-xs text-white/40">{quota.used}/{quota.limit}</span>}
           {profile?.is_admin && (
-            <Link href="/admin" className="text-xs bg-white/10 text-white/70 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/20">⚙ Admin</Link>
+            <Link href="/admin" className="text-xs bg-white/10 text-white/70 border border-white/10 px-2.5 py-1.5 rounded-lg hover:bg-white/20">⚙ Admin</Link>
           )}
           {profile?.tier === 'free' && !profile?.is_admin && (
-            <Link href="/pricing" className="text-xs bg-[#FF6B00] text-white px-3 py-1.5 rounded-lg hover:bg-[#e55f00]">Upgrade</Link>
+            <Link href="/pricing" className="text-xs bg-[#FF6B00] text-white px-2.5 py-1.5 rounded-lg hover:bg-[#e55f00]">Upgrade</Link>
           )}
-          <Link href="/history" className="text-xs text-white/30 hover:text-white hidden sm:block">History</Link>
-          <Link href="/settings" className="text-xs text-white/30 hover:text-white">Settings</Link>
+          <Link href="/studio" className="text-xs text-white/50 hover:text-white">Studio</Link>
+          <Link href="/history" className="text-xs text-white/50 hover:text-white">History</Link>
+          <Link href="/settings" className="text-xs text-white/50 hover:text-white">Settings</Link>
           <button onClick={signOut} className="text-xs text-white/30 hover:text-white">Sign out</button>
         </div>
       </nav>

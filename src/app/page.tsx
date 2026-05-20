@@ -17,6 +17,9 @@ export default function LandingPage() {
           <Link href="/pricing" className="text-sm text-white/60 hover:text-white transition-colors">
             Pricing
           </Link>
+          <Link href="/studio" className="text-sm text-white/60 hover:text-white transition-colors">
+            Post Studio
+          </Link>
           <Link href="/login" className="text-sm text-white/60 hover:text-white transition-colors">
             Sign in
           </Link>
