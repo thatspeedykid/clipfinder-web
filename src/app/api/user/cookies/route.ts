@@ -14,42 +14,24 @@ export async function POST(req: NextRequest) {
     const { cookies } = await req.json()
     if (!cookies?.trim()) return NextResponse.json({ error: 'cookies required' }, { status: 400 })
 
-    // Save cookies to user_secrets table
     await supabase.from('user_secrets').upsert({
       user_id: user.id,
       yt_cookies: cookies.trim(),
       updated_at: new Date().toISOString(),
     })
 
-    // Update saved_at on profile so we can check expiry
     await supabase.from('profiles').update({
       yt_cookie_saved_at: new Date().toISOString(),
     }).eq('id', user.id)
 
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[user/cookies] error:', err)
+    console.error('[user/cookies POST] error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
-export async function DELETE(req: NextRequest) {
-  try {
-    const supabase = createAdminClient()
-    const authHeader = req.headers.get('authorization')
-    if (!authHeader) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    const token = authHeader.replace('Bearer ', '')
-    const { data: { user }, error } = await supabase.auth.getUser(token)
-    if (error || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-    await supabase.from('user_secrets').delete().eq('user_id', user.id)
-    await supabase.from('profiles').update({ yt_cookie_saved_at: null }).eq('id', user.id)
-
-    return NextResponse.json({ success: true })
-  } catch (err) {
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
-  }
-}
+export async function GET(req: NextRequest) {
   try {
     const supabase = createAdminClient()
     const authHeader = req.headers.get('authorization')
@@ -68,6 +50,24 @@ export async function DELETE(req: NextRequest) {
       has_cookies: !!profile?.yt_cookie_saved_at,
       saved_at: profile?.yt_cookie_saved_at ?? null,
     })
+  } catch (err) {
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const supabase = createAdminClient()
+    const authHeader = req.headers.get('authorization')
+    if (!authHeader) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const token = authHeader.replace('Bearer ', '')
+    const { data: { user }, error } = await supabase.auth.getUser(token)
+    if (error || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+    await supabase.from('user_secrets').delete().eq('user_id', user.id)
+    await supabase.from('profiles').update({ yt_cookie_saved_at: null }).eq('id', user.id)
+
+    return NextResponse.json({ success: true })
   } catch (err) {
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
