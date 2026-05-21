@@ -8,7 +8,7 @@ import Link from 'next/link'
 import Nav from '@/components/Nav'
 
 type Job = { id: string; status: string; progress: number; progress_msg: string; error_msg?: string; video_title?: string; clips_found?: number }
-type Clip = { id: string; title: string; summary: string; start_ts: string; end_ts: string; duration_sec: number; score: number; file_url?: string; speaker?: string }
+type Clip = { id: string; title?: string; summary?: string; start_ts?: string; end_ts?: string; duration_sec?: number; score?: number; file_url?: string; speaker?: string }
 type UserProfile = { tier: string; clips_today: number; is_admin: boolean; yt_cookie_saved_at?: string }
 type Quota = { used: number; limit: number; allowed: boolean }
 
