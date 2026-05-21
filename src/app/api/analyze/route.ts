@@ -145,8 +145,9 @@ export async function POST(req: NextRequest) {
     const workerSecret = process.env.WORKER_SECRET ?? ''
     let userId: string
 
-    if (workerSecret && token === workerSecret) {
-      // Worker service call — skip user JWT check
+    const isServiceCall = workerSecret && token === workerSecret
+    
+    if (isServiceCall) {
       const bodyClone = await req.clone().json()
       userId = bodyClone.userId ?? 'service'
     } else {
@@ -155,8 +156,11 @@ export async function POST(req: NextRequest) {
       userId = user.id
     }
 
-    const quota = await checkQuota(userId)
-    if (!quota.allowed) return NextResponse.json({ error: quota.message, quota }, { status: 429 })
+    // Only check quota for real user calls, not worker service calls
+    if (!isServiceCall) {
+      const quota = await checkQuota(userId)
+      if (!quota.allowed) return NextResponse.json({ error: quota.message, quota }, { status: 429 })
+    }
 
     const body = await req.json()
     const { jobId, transcript, videoTitle, mode = 'auto', names = '' } = body
@@ -198,7 +202,7 @@ export async function POST(req: NextRequest) {
       clips_found: clips.length,
     }).eq('id', jobId)
 
-    await incrementQuota(userId)
+    if (!isServiceCall) await incrementQuota(userId)
     return NextResponse.json({ success: true, clips: clipRows, count: clips.length, provider })
 
   } catch (err) {
