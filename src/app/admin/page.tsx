@@ -11,6 +11,12 @@ type User = { id: string; email: string; tier: string; is_admin: boolean; is_ban
 type ConfigRow = { key: string; value: string; label: string; group_name: string; is_secret: boolean; hasValue: boolean }
 type Flag = { key: string; enabled: boolean; label: string; description: string; group_name: string }
 type BlockedIp = { ip: string; reason: string; created_at: string }
+type AdminClip = {
+  id: string; title: string; file_url?: string; file_size_mb?: number
+  file_expires_at?: string; storage_path?: string; created_at: string
+  profiles?: { email: string; tier: string }
+  jobs?: { video_title: string; source_url: string }
+}
 
 const STATUS_COLOR: Record<string, string> = {
   queued: 'bg-gray-500/20 text-gray-400', downloading: 'bg-blue-500/20 text-blue-400',
@@ -18,7 +24,7 @@ const STATUS_COLOR: Record<string, string> = {
   cutting: 'bg-orange-500/20 text-orange-400', done: 'bg-green-500/20 text-green-400', error: 'bg-red-500/20 text-red-400',
 }
 
-const TABS = ['jobs', 'users', 'keys', 'flags', 'security'] as const
+const TABS = ['jobs', 'users', 'keys', 'flags', 'security', 'clips'] as const
 type Tab = typeof TABS[number]
 
 export default function AdminPage() {
@@ -33,6 +39,8 @@ export default function AdminPage() {
   const [config, setConfig] = useState<ConfigRow[]>([])
   const [flags, setFlags] = useState<Flag[]>([])
   const [blockedIps, setBlockedIps] = useState<BlockedIp[]>([])
+  const [adminClips, setAdminClips] = useState<AdminClip[]>([])
+  const [clipsLoading, setClipsLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState('active')
   const [editingKey, setEditingKey] = useState<string | null>(null)
@@ -92,6 +100,13 @@ export default function AdminPage() {
     if (r.ok) { const d = await r.json(); setBlockedIps(d.blocked_ips ?? []) }
   }, [authFetch])
 
+  const loadClips = useCallback(async () => {
+    setClipsLoading(true)
+    const r = await authFetch('/api/admin/clips')
+    if (r.ok) { const d = await r.json(); setAdminClips(d.clips ?? []) }
+    setClipsLoading(false)
+  }, [authFetch])
+
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) { router.replace('/login'); return }
@@ -111,6 +126,7 @@ export default function AdminPage() {
     else if (tab === 'keys') loadConfig()
     else if (tab === 'flags') loadFlags()
     else if (tab === 'security') { loadBlockedIps(); loadUsers() }
+    else if (tab === 'clips') loadClips()
   }, [tab, loading, statusFilter])
 
   useEffect(() => {
@@ -144,6 +160,23 @@ export default function AdminPage() {
   async function toggleAdmin(userId: string, is_admin: boolean) {
     await authFetch('/api/admin/users', { method: 'PATCH', body: JSON.stringify({ userId, is_admin }) })
     loadUsers(); toast(is_admin ? 'Admin granted' : 'Admin removed')
+  }
+
+  async function deleteClip(clipId: string, storagePath?: string) {
+    await authFetch('/api/admin/clips', {
+      method: 'DELETE',
+      body: JSON.stringify({ clipId, storagePath })
+    })
+    toast('Clip deleted'); loadClips()
+  }
+
+  async function purgeExpiredClips() {
+    const r = await authFetch('/api/admin/clips', {
+      method: 'DELETE',
+      body: JSON.stringify({ deleteAll: true })
+    })
+    const d = await r.json()
+    toast(`Purged ${d.deleted} expired clips`); loadClips()
   }
 
   async function setUserPassword(userId: string) {
@@ -511,6 +544,70 @@ export default function AdminPage() {
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+        )}
+        {/* CLIPS */}
+        {tab === 'clips' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-white/40">All stored clips. Free tier expires in 24h, Pro/Agency in 15 days.</p>
+              <div className="flex gap-2">
+                <button onClick={loadClips} className="text-xs bg-white/5 text-white/50 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10">
+                  ↻ Refresh
+                </button>
+                <button onClick={purgeExpiredClips}
+                  className="text-xs bg-red-500/10 text-red-400 border border-red-500/20 px-3 py-1.5 rounded-lg hover:bg-red-500/20">
+                  🗑 Purge expired
+                </button>
+              </div>
+            </div>
+
+            {clipsLoading && <p className="text-white/30 text-sm text-center py-8">Loading...</p>}
+            {!clipsLoading && adminClips.length === 0 && <p className="text-white/30 text-sm text-center py-8">No clips stored</p>}
+
+            <div className="space-y-2">
+              {adminClips.map(clip => {
+                const expired = clip.file_expires_at ? new Date(clip.file_expires_at) < new Date() : false
+                const expiresIn = clip.file_expires_at
+                  ? Math.ceil((new Date(clip.file_expires_at).getTime() - Date.now()) / (1000 * 60 * 60))
+                  : null
+
+                return (
+                  <div key={clip.id} className={`bg-white/5 border rounded-xl p-4 ${expired ? 'border-red-500/20' : 'border-white/10'}`}>
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          <p className="text-sm font-medium truncate">{clip.title}</p>
+                          {expired
+                            ? <span className="text-xs bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full">expired</span>
+                            : expiresIn !== null && <span className="text-xs bg-white/10 text-white/50 px-2 py-0.5 rounded-full">
+                                {expiresIn < 24 ? `${expiresIn}h left` : `${Math.ceil(expiresIn/24)}d left`}
+                              </span>
+                          }
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${
+                            clip.profiles?.tier === 'agency' ? 'bg-purple-500/20 text-purple-400' :
+                            clip.profiles?.tier === 'pro' ? 'bg-[#FF6B00]/20 text-[#FF6B00]' :
+                            'bg-white/10 text-white/40'
+                          }`}>{clip.profiles?.tier ?? 'free'}</span>
+                        </div>
+                        <p className="text-xs text-white/40 truncate">{clip.profiles?.email} · {clip.jobs?.video_title || clip.jobs?.source_url}</p>
+                        <div className="flex items-center gap-3 mt-1 text-xs text-white/30">
+                          {clip.file_size_mb && <span>{clip.file_size_mb.toFixed(1)} MB</span>}
+                          <span>{new Date(clip.created_at).toLocaleDateString()}</span>
+                          {clip.file_url && !expired && (
+                            <a href={clip.file_url} target="_blank" rel="noopener" className="text-[#FF6B00] hover:underline">Download</a>
+                          )}
+                        </div>
+                      </div>
+                      <button onClick={() => deleteClip(clip.id, clip.storage_path)}
+                        className="text-xs bg-red-500/10 text-red-400 px-3 py-1.5 rounded-lg hover:bg-red-500/20 flex-shrink-0">
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           </div>
         )}

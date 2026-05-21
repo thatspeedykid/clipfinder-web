@@ -97,9 +97,79 @@ def run_yt_dlp(cmd, timeout=300):
     return result
 
 
+def get_kick_clip_direct(clip_slug, tmp):
+    """
+    Bypass yt-dlp for Kick clips by hitting their API directly.
+    yt-dlp's Kick extractor is broken since Feb 2026 due to API changes.
+    """
+    import requests as req
+
+    # Extract clip slug from URL
+    # URL formats: kick.com/clips/SLUG or kick.com/channel/clips/SLUG
+    slug = clip_slug.split('/')[-1]
+    if '?' in slug:
+        slug = slug.split('?')[0]
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://kick.com/',
+        'Origin': 'https://kick.com',
+    }
+
+    # Try Kick's public API
+    api_url = f'https://kick.com/api/v2/clips/{slug}'
+    try:
+        r = req.get(api_url, headers=headers, timeout=15)
+        if r.ok:
+            data = r.json()
+            clip_url = data.get('clip_url') or data.get('video_url') or data.get('playback_url')
+            title = data.get('title', '')
+            duration = data.get('duration', 0)
+            if clip_url:
+                print(f"[kick] Got clip URL directly from API: {clip_url[:60]}")
+                return clip_url, title, duration
+    except Exception as e:
+        print(f"[kick] API v2 failed: {e}")
+
+    # Try alternate API endpoint
+    try:
+        api_url2 = f'https://kick.com/api/v1/clips/{slug}'
+        r2 = req.get(api_url2, headers=headers, timeout=15)
+        if r2.ok:
+            data2 = r2.json()
+            clip_url = data2.get('clip_url') or data2.get('video_url')
+            title = data2.get('title', '')
+            if clip_url:
+                print(f"[kick] Got clip URL from API v1: {clip_url[:60]}")
+                return clip_url, title, 0
+    except Exception as e:
+        print(f"[kick] API v1 failed: {e}")
+
+    return None, None, 0
+
+
 def download_audio(url, tmp, source, cookies_file=None):
     """Download audio only — much faster than full video."""
     audio_raw = tmp / "audio_raw.%(ext)s"
+
+    # Kick: try direct API first, then yt-dlp as fallback
+    if source == "kick":
+        clip_url, _, _ = get_kick_clip_direct(url, tmp)
+        if clip_url:
+            # Download the direct MP4 URL
+            cmd = [
+                "yt-dlp", clip_url,
+                "-o", str(audio_raw),
+                "-x", "--audio-format", "mp3", "--audio-quality", "64K",
+                "--quiet", "--no-warnings",
+            ]
+            result = run_yt_dlp(cmd)
+            if result.returncode == 0:
+                return result
+            print(f"[kick] Direct URL download failed, trying yt-dlp...")
+
     cmd = [
         "yt-dlp", url,
         "-o", str(audio_raw),
@@ -108,13 +178,32 @@ def download_audio(url, tmp, source, cookies_file=None):
     ]
 
     if source == "kick":
-        # Kick needs impersonation to bypass 403
         cmd += [
             "--add-headers", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "--add-headers", "Referer:https://kick.com/",
+            "--add-headers", "Origin:https://kick.com",
             "--extractor-retries", "5",
             "--fragment-retries", "5",
         ]
+    elif source == "youtube":
+        cmd += [
+            "--extractor-args", "youtube:player_client=android,web",
+            "--no-check-certificates",
+        ]
+        proxy = get_proxy()
+        if proxy:
+            cmd += ["--proxy", proxy]
+            print("[proxy] routing YouTube through residential proxy")
+        # Try WITHOUT cookies first — cookies are tied to browser IP
+        # and get rejected when coming from proxy IP
+        result = run_yt_dlp(cmd, timeout=120)
+        if result.returncode == 0:
+            return result
+        # If failed and we have cookies, try WITH cookies as fallback
+        print("[youtube] no-cookie attempt failed, trying with cookies...")
+        if cookies_file:
+            cmd += ["--cookies", cookies_file]
+        return run_yt_dlp(cmd, timeout=120)
     elif source == "twitch":
         cmd += ["-f", "audio_only/bestaudio/best"]
     elif source in ("twitter", "unknown"):
@@ -126,9 +215,19 @@ def download_audio(url, tmp, source, cookies_file=None):
     return run_yt_dlp(cmd)
 
 
-def get_video_info(url, cookies_file=None):
+def get_proxy():
+    """Get proxy URL from environment for YouTube requests."""
+    return os.environ.get("PROXY_URL", "")
+
+
+def get_video_info(url, cookies_file=None, source="unknown"):
     """Get video metadata without downloading."""
     cmd = ["yt-dlp", url, "--dump-json", "--no-playlist", "--quiet"]
+    if source == "youtube":
+        cmd += ["--extractor-args", "youtube:player_client=android,web"]
+        proxy = get_proxy()
+        if proxy:
+            cmd += ["--proxy", proxy]
     if cookies_file:
         cmd += ["--cookies", cookies_file]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -137,6 +236,11 @@ def get_video_info(url, cookies_file=None):
             return json.loads(result.stdout.strip())
         except Exception:
             pass
+    # For Kick, try direct API
+    if source == "kick":
+        _, title, duration = get_kick_clip_direct(url, None)
+        if title:
+            return {"title": title, "duration": duration}
     return {}
 
 
@@ -240,7 +344,7 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
 
         # ── Step 1: Get video info ────────────────────────────────────────────
         update_job(sb, job_id, "downloading", 5, "Fetching video info...")
-        info = get_video_info(source_url, cookies_file)
+        info = get_video_info(source_url, cookies_file, source)
         video_title = info.get("title", "")
         video_duration = int(info.get("duration", 0))
         if video_title:
@@ -354,31 +458,54 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
                 print(f"[cut] clip {i+1} output missing")
                 continue
 
-            print(f"[cut] clip {i+1} — {clip_path.stat().st_size/1024/1024:.1f}MB")
+            clip_size_mb = clip_path.stat().st_size / 1024 / 1024
+            print(f"[cut] clip {i+1} — {clip_size_mb:.1f}MB")
 
-            # Upload to R2 if configured
-            r2_keys = ["CLOUDFLARE_R2_ACCOUNT_ID", "CLOUDFLARE_R2_ACCESS_KEY_ID",
-                       "CLOUDFLARE_R2_SECRET_ACCESS_KEY", "CLOUDFLARE_R2_BUCKET_NAME", "CLOUDFLARE_R2_PUBLIC_URL"]
-            if all(os.environ.get(k) for k in r2_keys):
-                try:
-                    import boto3
-                    from botocore.config import Config
-                    s3 = boto3.client("s3",
-                        endpoint_url=f"https://{os.environ['CLOUDFLARE_R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
-                        aws_access_key_id=os.environ["CLOUDFLARE_R2_ACCESS_KEY_ID"],
-                        aws_secret_access_key=os.environ["CLOUDFLARE_R2_SECRET_ACCESS_KEY"],
-                        config=Config(signature_version="s3v4"), region_name="auto")
-                    r2_key = f"clips/{user_id}/{job_id}/clip_{i+1}.mp4"
-                    s3.upload_file(str(clip_path), os.environ["CLOUDFLARE_R2_BUCKET_NAME"], r2_key,
-                                   ExtraArgs={"ContentType": "video/mp4"})
-                    file_url = f"{os.environ['CLOUDFLARE_R2_PUBLIC_URL']}/{r2_key}"
-                    from datetime import datetime, timedelta
-                    sb.table("clips").update({"file_url": file_url, "file_expires_at": (datetime.utcnow()+timedelta(days=1)).isoformat()}).eq("id", clip.get("id","")).execute()
-                    print(f"[r2] uploaded: {file_url}")
-                except Exception as e:
-                    print(f"[r2] failed: {e}")
+            # ── Upload to Supabase Storage ────────────────────────────────
+            # Free tier: 24h expiry. Pro/Agency: 15 days.
+            try:
+                # Get user tier for expiry calculation
+                profile_res = sb.table("profiles").select("tier").eq("id", user_id).single().execute()
+                tier = (profile_res.data or {}).get("tier", "free")
+                from datetime import datetime, timedelta
+                if tier == "free":
+                    expires = datetime.utcnow() + timedelta(hours=24)
+                else:
+                    expires = datetime.utcnow() + timedelta(days=15)
 
-            clip_path.unlink(missing_ok=True)
+                # Upload to Supabase Storage bucket "clips"
+                storage_path = f"{user_id}/{job_id}/clip_{i+1}.mp4"
+                with open(clip_path, "rb") as f:
+                    clip_data = f.read()
+
+                sb.storage.from_("clips").upload(
+                    path=storage_path,
+                    file=clip_data,
+                    file_options={"content-type": "video/mp4", "upsert": "true"}
+                )
+
+                # Get signed URL valid for expiry duration
+                sign_seconds = int((expires - datetime.utcnow()).total_seconds())
+                signed = sb.storage.from_("clips").create_signed_url(storage_path, sign_seconds)
+                file_url = signed.get("signedURL", "")
+
+                # Update clip record
+                clip_id = clip.get("id", "")
+                if clip_id:
+                    sb.table("clips").update({
+                        "file_url": file_url,
+                        "file_expires_at": expires.isoformat(),
+                        "file_size_mb": round(clip_size_mb, 2),
+                        "storage_path": storage_path,
+                    }).eq("id", clip_id).execute()
+
+                print(f"[storage] uploaded clip {i+1} — expires {expires.strftime('%Y-%m-%d %H:%M')} UTC")
+                clip_path.unlink(missing_ok=True)
+
+            except Exception as e:
+                print(f"[storage] upload failed for clip {i+1}: {e}")
+                # Still delete local file even if upload fails
+                clip_path.unlink(missing_ok=True)
 
         update_job(sb, job_id, "done", 100, f"Done! {len(clips)} clips ready", {"clips_found": len(clips)})
         print(f"[done] job {job_id[:8]} — {len(clips)} clips")
