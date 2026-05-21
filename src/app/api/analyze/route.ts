@@ -207,6 +207,7 @@ export async function POST(req: NextRequest) {
 
   } catch (err) {
     console.error('[analyze] error:', err)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    console.error('[analyze] error details:', JSON.stringify(err, Object.getOwnPropertyNames(err)))
+    return NextResponse.json({ error: 'Internal server error', details: String(err) }, { status: 500 })
   }
 }
