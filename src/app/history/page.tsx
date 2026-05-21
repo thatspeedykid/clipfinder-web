@@ -147,7 +147,7 @@ export default function HistoryPage() {
                       <div key={clip.id} className="bg-white/5 rounded-xl p-4">
                         <div className="flex items-start justify-between gap-3 mb-2">
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium">{clip.title ?? 'Untitled'}</p>
+                            <a href={`/clips/${clip.id}`} className="text-sm font-medium hover:text-[#FF6B00] transition-colors">{clip.title ?? 'Untitled'}</a>
                             <p className="text-xs text-white/40 mt-0.5">{clip.summary}</p>
                           </div>
                           {clip.score && <span className="text-xs bg-[#FF6B00]/20 text-[#FF6B00] px-2 py-0.5 rounded-full flex-shrink-0">Score {clip.score}/10</span>}
@@ -169,6 +169,10 @@ export default function HistoryPage() {
                         <div className="flex gap-2 flex-wrap">
                           {clip.file_url && !expired && (
                             <>
+                              <a href={`/clips/${clip.id}`}
+                                className="text-xs bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30 hover:bg-[#FF6B00]/30 px-3 py-1.5 rounded-lg transition-colors">
+                                ✨ View & Post
+                              </a>
                               <button
                                 onClick={() => setPreviewClip(previewClip === clip.id ? null : clip.id)}
                                 className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${previewClip === clip.id ? 'bg-white/20 text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}>
