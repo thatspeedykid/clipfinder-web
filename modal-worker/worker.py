@@ -431,9 +431,14 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
         if not analyze_resp.ok:
             err = f"AI analysis failed: {analyze_resp.status_code}"
             try:
-                err = analyze_resp.json().get("error", err)
+                resp_json = analyze_resp.json()
+                err = resp_json.get("error", err)
+                details = resp_json.get("details", "")
+                if details:
+                    print(f"[analyze] error details: {details}")
             except Exception:
                 pass
+            print(f"[analyze] full response: {analyze_resp.text[:500]}")
             update_job(sb, job_id, "error", 0, err, {"error_msg": err})
             return
 
