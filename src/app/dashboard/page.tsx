@@ -57,6 +57,7 @@ export default function DashboardPage() {
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null)
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [quota, setQuota] = useState<Quota | null>(null)
+  const [sourceFlags, setSourceFlags] = useState({ youtube: true, kick: true, twitch: true, twitter: true })
   const [url, setUrl] = useState('')
   const [mode, setMode] = useState<'auto' | 'interview' | 'auto_edit'>('auto')
   const [job, setJob] = useState<Job | null>(null)
@@ -79,7 +80,7 @@ export default function DashboardPage() {
     })
   }, [])
 
-  // Load profile + check cookie reminder
+  // Load profile + check cookie reminder + source flags
   useEffect(() => {
     if (!user) return
     fetch('/api/user', { headers: { Authorization: `Bearer ${tokenRef.current}` } })
@@ -87,11 +88,11 @@ export default function DashboardPage() {
       .then(({ profile, quota }) => {
         setProfile(profile)
         setQuota(quota)
-        // Show cookie reminder if cookies are 20+ days old
         if (profile?.yt_cookie_saved_at && daysSince(profile.yt_cookie_saved_at) >= 20) {
           setShowCookieReminder(true)
         }
       })
+    fetch('/api/flags/sources').then(r => r.json()).then(setSourceFlags).catch(() => {})
   }, [user])
 
   // Job polling
@@ -197,18 +198,38 @@ export default function DashboardPage() {
         {/* URL Input */}
         <form onSubmit={handleSubmit} className="mb-8">
           <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
-            <label className="block text-sm font-medium mb-3">Paste a YouTube, Kick, Twitch, or Twitter URL</label>
+            {/* Enabled sources pills */}
+            <div className="flex gap-2 mb-4 flex-wrap">
+              {[
+                { key: 'youtube', label: 'YouTube',   icon: '▶' },
+                { key: 'kick',    label: 'Kick',      icon: '🎮' },
+                { key: 'twitch',  label: 'Twitch',    icon: '🟣' },
+                { key: 'twitter', label: 'Twitter/X', icon: '𝕏' },
+              ].map(s => sourceFlags[s.key as keyof typeof sourceFlags] ? (
+                <span key={s.key} className={`text-xs px-2.5 py-1 rounded-full border ${
+                  source === s.key
+                    ? 'bg-[#FF6B00]/20 text-[#FF6B00] border-[#FF6B00]/30'
+                    : 'bg-white/5 text-white/40 border-white/10'
+                }`}>
+                  {s.icon} {s.label}
+                </span>
+              ) : null)}
+            </div>
+
             <div className="flex gap-3">
-              <div className="relative flex-1">
-                {source && <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-white/40 uppercase font-medium tracking-wide">{source}</span>}
-                <input type="url" placeholder="https://..." value={url} onChange={e => setUrl(e.target.value)} required
-                  className={`w-full bg-white/5 border border-white/10 rounded-xl py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-[#FF6B00] transition-colors ${source ? 'pl-16 pr-4' : 'px-4'}`} />
-              </div>
-              <button type="submit" disabled={submitting || !url}
+              <input type="url" placeholder="Paste a URL..." value={url} onChange={e => setUrl(e.target.value)} required
+                className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-[#FF6B00] transition-colors" />
+              <button type="submit" disabled={submitting || !url || (!!source && !sourceFlags[source as keyof typeof sourceFlags])}
                 className="bg-[#FF6B00] text-white font-medium px-5 py-2.5 rounded-xl hover:bg-[#e55f00] disabled:opacity-50 whitespace-nowrap">
                 {submitting ? 'Starting...' : 'Find clips'}
               </button>
             </div>
+
+            {/* Source disabled warning */}
+            {source && !sourceFlags[source as keyof typeof sourceFlags] && (
+              <p className="text-yellow-400 text-xs mt-2">⚠️ {source.charAt(0).toUpperCase() + source.slice(1)} is currently disabled.</p>
+            )}
+
             <div className="flex gap-2 mt-4 flex-wrap">
               {(['auto', 'interview', 'auto_edit'] as const).map(m => (
                 <button key={m} type="button" onClick={() => setMode(m)}
@@ -364,7 +385,14 @@ export default function DashboardPage() {
           <div className="text-center py-16 text-white/20">
             <p className="text-4xl mb-3">🎬</p>
             <p className="text-sm">Paste a URL above to find clips</p>
-            <p className="text-xs mt-2 text-white/15">YouTube · Kick · Twitch · Twitter/X</p>
+            <p className="text-xs mt-2 text-white/15">
+              {[
+                sourceFlags.youtube && 'YouTube',
+                sourceFlags.kick && 'Kick',
+                sourceFlags.twitch && 'Twitch',
+                sourceFlags.twitter && 'Twitter/X',
+              ].filter(Boolean).join(' · ')}
+            </p>
           </div>
         )}
       </div>

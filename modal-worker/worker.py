@@ -187,23 +187,25 @@ def download_audio(url, tmp, source, cookies_file=None):
         ]
     elif source == "youtube":
         cmd += [
-            "--extractor-args", "youtube:player_client=android,web",
+            "--extractor-args", "youtube:player_client=tv_simply,web",
             "--no-check-certificates",
+            "--sleep-requests", "1",
         ]
         proxy = get_proxy()
         if proxy:
             cmd += ["--proxy", proxy]
             print("[proxy] routing YouTube through residential proxy")
-        # Try WITHOUT cookies first — cookies are tied to browser IP
-        # and get rejected when coming from proxy IP
+        # With tv_simply client, cookies work better
+        if cookies_file:
+            cmd += ["--cookies", cookies_file]
         result = run_yt_dlp(cmd, timeout=120)
         if result.returncode == 0:
             return result
-        # If failed and we have cookies, try WITH cookies as fallback
-        print("[youtube] no-cookie attempt failed, trying with cookies...")
-        if cookies_file:
-            cmd += ["--cookies", cookies_file]
-        return run_yt_dlp(cmd, timeout=120)
+        # Fallback: try web client without cookies
+        print("[youtube] tv_simply failed, trying web client...")
+        cmd2 = [c for c in cmd if c != cookies_file and "--cookies" not in c]
+        cmd2 = [c.replace("tv_simply,web", "web") if "tv_simply" in c else c for c in cmd2]
+        return run_yt_dlp(cmd2, timeout=120)
     elif source == "twitch":
         cmd += ["-f", "audio_only/bestaudio/best"]
     elif source in ("twitter", "unknown"):
@@ -469,7 +471,7 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
                 tier = (profile_res.data or {}).get("tier", "free")
                 from datetime import datetime, timedelta
                 if tier == "free":
-                    expires = datetime.utcnow() + timedelta(hours=24)
+                    expires = datetime.utcnow() + timedelta(hours=12)
                 else:
                     expires = datetime.utcnow() + timedelta(days=15)
 
