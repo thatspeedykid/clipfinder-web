@@ -65,7 +65,8 @@ export default function DashboardPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [showCookieReminder, setShowCookieReminder] = useState(false)
-  const [openStudio, setOpenStudio] = useState<string | null>(null) // clip id
+  const [openStudio, setOpenStudio] = useState<string | null>(null)
+  const [openPreview, setOpenPreview] = useState<string | null>(null) // clip id
   const [studios, setStudios] = useState<Record<string, PostStudioState>>({})
   const pollRef = useRef<NodeJS.Timeout | null>(null)
 
@@ -275,36 +276,51 @@ export default function DashboardPage() {
             <h2 className="font-semibold mb-4 text-white/80">{clips.length} clips found</h2>
             <div className="space-y-4">
               {clips.map(clip => {
-                const studio = studios[clip.id] ?? { platform: 'twitter', tone: 'drama', content: '', hook: '', generating: false, copied: false }
+                const studio = studios[clip.id] ?? { platform: 'twitter', tone: 'drama', options: [], hook: '', generating: false, copied: null }
                 const isOpen = openStudio === clip.id
+                const isPreviewOpen = openPreview === clip.id
 
                 return (
                   <div key={clip.id} className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden">
                     {/* Clip header */}
                     <div className="p-5">
                       <div className="flex items-start justify-between gap-4 mb-2">
-                        <h3 className="font-medium text-sm leading-snug">{clip.title}</h3>
-                        <span className="text-xs bg-[#FF6B00]/20 text-[#FF6B00] px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0">Score {clip.score}/10</span>
+                        <h3 className="font-medium text-sm leading-snug">{clip.title ?? 'Untitled clip'}</h3>
+                        <span className="text-xs bg-[#FF6B00]/20 text-[#FF6B00] px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0">Score {clip.score ?? '?'}/10</span>
                       </div>
                       <p className="text-white/50 text-xs mb-3">{clip.summary}</p>
                       <div className="flex items-center gap-4 text-xs text-white/40 mb-3">
                         <span>⏱ {clip.start_ts} → {clip.end_ts}</span>
-                        <span>📏 {Math.round(clip.duration_sec)}s</span>
+                        <span>📏 {Math.round(clip.duration_sec ?? 0)}s</span>
                         {clip.speaker && <span>🎤 {clip.speaker}</span>}
                       </div>
                       <div className="flex gap-2 flex-wrap">
                         {clip.file_url && (
-                          <a href={clip.file_url} className="text-xs bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors" download>⬇️ Download</a>
+                          <>
+                            <button
+                              onClick={() => setOpenPreview(isPreviewOpen ? null : clip.id)}
+                              className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${isPreviewOpen ? 'bg-white/20 text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}>
+                              {isPreviewOpen ? '▼ Hide' : '▶ Preview'}
+                            </button>
+                            <a href={clip.file_url} className="text-xs bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors" download>⬇️ Download</a>
+                          </>
                         )}
                         <button
                           onClick={() => setOpenStudio(isOpen ? null : clip.id)}
                           className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${isOpen ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}>
-                          ✨ Post Studio {isOpen ? '▲' : '▼'}
+                          ✨ Post Bridge {isOpen ? '▲' : '▼'}
                         </button>
                       </div>
                     </div>
 
-                    {/* Post Studio — inline expand */}
+                    {/* Video preview */}
+                    {isPreviewOpen && clip.file_url && (
+                      <div className="border-t border-white/10 bg-black p-4">
+                        <video src={clip.file_url} controls className="w-full rounded-xl" style={{ maxHeight: '320px' }} />
+                      </div>
+                    )}
+
+                    {/* Post Bridge — inline expand */}
                     {isOpen && (
                       <div className="border-t border-white/10 bg-black/30 p-5">
                         {/* Hook line */}
@@ -319,7 +335,7 @@ export default function DashboardPage() {
                         <div className="flex gap-2 mb-3 flex-wrap">
                           {PLATFORMS.map(p => (
                             <button key={p.key}
-                              onClick={() => updateStudio(clip.id, { platform: p.key as PostStudioState['platform'], content: '', hook: '' })}
+                              onClick={() => updateStudio(clip.id, { platform: p.key as PostStudioState['platform'], options: [], hook: '' })}
                               className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${studio.platform === p.key ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30' : 'bg-white/5 text-white/50 border border-white/10 hover:bg-white/10'}`}>
                               {p.icon} {p.label}
                             </button>
@@ -330,7 +346,7 @@ export default function DashboardPage() {
                         <div className="flex gap-2 mb-4 flex-wrap">
                           {TONES.map(t => (
                             <button key={t.key}
-                              onClick={() => updateStudio(clip.id, { tone: t.key as PostStudioState['tone'], content: '', hook: '' })}
+                              onClick={() => updateStudio(clip.id, { tone: t.key as PostStudioState['tone'], options: [], hook: '' })}
                               className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${studio.tone === t.key ? 'bg-white/20 text-white border border-white/20' : 'bg-white/5 text-white/40 border border-white/10 hover:bg-white/10'}`}>
                               {t.label}
                             </button>

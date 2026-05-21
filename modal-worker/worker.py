@@ -22,6 +22,7 @@ image = (
         "groq",
         "boto3",
         "requests",
+        "curl_cffi",
         "supabase",
         "fastapi[standard]",
     )
@@ -100,52 +101,47 @@ def run_yt_dlp(cmd, timeout=300):
 def get_kick_clip_direct(clip_slug, tmp):
     """
     Bypass yt-dlp for Kick clips by hitting their API directly.
-    yt-dlp's Kick extractor is broken since Feb 2026 due to API changes.
+    Uses curl_cffi with browser impersonation to bypass Cloudflare.
     """
-    import requests as req
+    try:
+        from curl_cffi import requests as cf_requests
+    except ImportError:
+        import requests as cf_requests
 
-    # Extract clip slug from URL
-    # URL formats: kick.com/clips/SLUG or kick.com/channel/clips/SLUG
+    # Extract slug from URL
     slug = clip_slug.split('/')[-1]
     if '?' in slug:
         slug = slug.split('?')[0]
 
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': 'https://kick.com/',
-        'Origin': 'https://kick.com',
-    }
+    print(f"[kick] trying direct API for slug: {slug}")
 
-    # Try Kick's public API
-    api_url = f'https://kick.com/api/v2/clips/{slug}'
-    try:
-        r = req.get(api_url, headers=headers, timeout=15)
-        if r.ok:
-            data = r.json()
-            clip_url = data.get('clip_url') or data.get('video_url') or data.get('playback_url')
-            title = data.get('title', '')
-            duration = data.get('duration', 0)
-            if clip_url:
-                print(f"[kick] Got clip URL directly from API: {clip_url[:60]}")
-                return clip_url, title, duration
-    except Exception as e:
-        print(f"[kick] API v2 failed: {e}")
-
-    # Try alternate API endpoint
-    try:
-        api_url2 = f'https://kick.com/api/v1/clips/{slug}'
-        r2 = req.get(api_url2, headers=headers, timeout=15)
-        if r2.ok:
-            data2 = r2.json()
-            clip_url = data2.get('clip_url') or data2.get('video_url')
-            title = data2.get('title', '')
-            if clip_url:
-                print(f"[kick] Got clip URL from API v1: {clip_url[:60]}")
-                return clip_url, title, 0
-    except Exception as e:
-        print(f"[kick] API v1 failed: {e}")
+    # Try with curl_cffi browser impersonation
+    for browser in ["chrome124", "chrome131", "safari17_0"]:
+        try:
+            r = cf_requests.get(
+                f"https://kick.com/api/v2/clips/{slug}",
+                impersonate=browser,
+                timeout=15,
+                headers={
+                    'Accept': 'application/json',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Referer': 'https://kick.com/',
+                    'Origin': 'https://kick.com',
+                }
+            )
+            if r.ok:
+                data = r.json()
+                clip_url = (data.get('clip_url') or data.get('video_url') or
+                           data.get('playback_url') or
+                           data.get('clip', {}).get('video_url', ''))
+                title = data.get('title') or data.get('clip', {}).get('title', '')
+                duration = data.get('duration', 0)
+                if clip_url:
+                    print(f"[kick] API success with {browser}: {clip_url[:60]}")
+                    return clip_url, title, duration
+            print(f"[kick] {browser} got {r.status_code}")
+        except Exception as e:
+            print(f"[kick] {browser} failed: {e}")
 
     return None, None, 0
 
@@ -198,14 +194,6 @@ def download_audio(url, tmp, source, cookies_file=None):
         # With tv_simply client, cookies work better
         if cookies_file:
             cmd += ["--cookies", cookies_file]
-        result = run_yt_dlp(cmd, timeout=120)
-        if result.returncode == 0:
-            return result
-        # Fallback: try web client without cookies
-        print("[youtube] tv_simply failed, trying web client...")
-        cmd2 = [c for c in cmd if c != cookies_file and "--cookies" not in c]
-        cmd2 = [c.replace("tv_simply,web", "web") if "tv_simply" in c else c for c in cmd2]
-        return run_yt_dlp(cmd2, timeout=120)
     elif source == "twitch":
         cmd += ["-f", "audio_only/bestaudio/best"]
     elif source in ("twitter", "unknown"):
@@ -405,6 +393,8 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
 
         # ── Step 4: AI analysis ────────────────────────────────────────────────
         app_url = os.environ.get("NEXT_PUBLIC_APP_URL", "").rstrip("/")
+        worker_secret_val = os.environ.get('WORKER_SECRET', 'NOT_SET')
+        print(f"[analyze] sending secret: {worker_secret_val[:6]}... to {app_url}/api/analyze")
         analyze_resp = req.post(
             f"{app_url}/api/analyze",
             json={"jobId": job_id, "transcript": transcript_text, "videoTitle": video_title, "mode": mode, "userId": user_id},
