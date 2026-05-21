@@ -285,7 +285,9 @@ export default function DashboardPage() {
                     {/* Clip header */}
                     <div className="p-5">
                       <div className="flex items-start justify-between gap-4 mb-2">
-                        <h3 className="font-medium text-sm leading-snug">{clip.title ?? 'Untitled clip'}</h3>
+                        <Link href={`/clips/${clip.id}`} className="font-medium text-sm leading-snug hover:text-[#FF6B00] transition-colors">
+                          {clip.title ?? 'Untitled clip'}
+                        </Link>
                         <span className="text-xs bg-[#FF6B00]/20 text-[#FF6B00] px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0">Score {clip.score ?? '?'}/10</span>
                       </div>
                       <p className="text-white/50 text-xs mb-3">{clip.summary}</p>
