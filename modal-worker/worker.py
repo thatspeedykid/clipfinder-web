@@ -277,8 +277,28 @@ def transcribe_with_groq(audio_path, groq_api_key):
     return "\n".join(lines)
 
 
-def cut_clip_section(url, start_ts, end_ts, output_path, cookies_file=None, source="unknown"):
-    """Download only the specific clip section (no-download mode)."""
+def cut_clip_section(url, start_ts, end_ts, output_path, cookies_file=None, source="unknown", direct_url=None):
+    """Download only the specific clip section (no-download mode).
+    For Kick, use direct_url (from API) to bypass 403."""
+    
+    # For Kick, use the direct CDN URL with ffmpeg instead of yt-dlp
+    if source == "kick" and direct_url:
+        # Use ffmpeg directly on the CDN URL — no auth needed
+        start_sec = ts_to_seconds(start_ts)
+        end_sec = ts_to_seconds(end_ts)
+        duration = end_sec - start_sec
+        result = subprocess.run([
+            "ffmpeg",
+            "-ss", str(start_sec),
+            "-i", direct_url,
+            "-t", str(duration),
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
+            "-avoid_negative_ts", "make_zero",
+            str(output_path), "-y", "-loglevel", "error"
+        ], capture_output=True, text=True, timeout=180)
+        return result
+
     section_str = f"*{start_ts}-{end_ts}"
     cmd = [
         "yt-dlp", url,
@@ -324,6 +344,7 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
 
         # ── Cookies: user-specific first, then global fallback ────────────────
         cookies_file = None
+        kick_direct_url = None  # Store direct URL for Kick cutting
         if use_cookies_flag:
             cookie_content = get_user_cookies(sb, user_id)
             if not cookie_content.strip():
@@ -340,6 +361,11 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
         if video_title:
             sb.table("jobs").update({"video_title": video_title, "video_duration": video_duration}).eq("id", job_id).execute()
             print(f"[info] {video_title} ({video_duration}s)")
+
+        # For Kick, get direct URL early so we can use it for cutting later
+        if source == "kick":
+            kick_direct_url, _, _ = get_kick_clip_direct(source_url, tmp)
+            print(f"[kick] stored direct URL for cutting: {kick_direct_url[:60] if kick_direct_url else 'none'}")
 
         # ── Step 2: Download audio ─────────────────────────────────────────────
         update_job(sb, job_id, "downloading", 15, "Downloading audio...")
@@ -433,15 +459,21 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
             clip_path = tmp / f"clip_{i+1}.mp4"
 
             if no_download_mode:
-                result = cut_clip_section(source_url, start_ts, end_ts, clip_path, cookies_file, source)
-                seg_files = list(tmp.glob(f"clip_{i+1}.*"))
-                if result.returncode == 0 and seg_files:
-                    actual = seg_files[0]
-                    if str(actual) != str(clip_path):
-                        subprocess.run(["ffmpeg", "-i", str(actual), "-c", "copy", str(clip_path), "-y", "-loglevel", "error"], timeout=60)
+                result = cut_clip_section(source_url, start_ts, end_ts, clip_path, cookies_file, source, direct_url=kick_direct_url if source == "kick" else None)
+                # Kick with direct URL: ffmpeg writes directly to clip_path
+                if source == "kick" and kick_direct_url:
+                    if result.returncode != 0 or not clip_path.exists():
+                        print(f"[cut] Kick ffmpeg cut failed: {result.stderr[-100:]}")
+                        continue
                 else:
-                    print(f"[cut] clip {i+1} section download failed: {result.stderr[-100:]}")
-                    continue
+                    seg_files = list(tmp.glob(f"clip_{i+1}.*"))
+                    if result.returncode == 0 and seg_files:
+                        actual = seg_files[0]
+                        if str(actual) != str(clip_path):
+                            subprocess.run(["ffmpeg", "-i", str(actual), "-c", "copy", str(clip_path), "-y", "-loglevel", "error"], timeout=60)
+                    else:
+                        print(f"[cut] clip {i+1} section download failed: {result.stderr[-100:]}")
+                        continue
             else:
                 print(f"[cut] clip {i+1} — no full video available, skipping")
                 continue
