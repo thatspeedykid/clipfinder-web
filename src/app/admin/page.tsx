@@ -41,6 +41,7 @@ export default function AdminPage() {
   const [blockedIps, setBlockedIps] = useState<BlockedIp[]>([])
   const [adminClips, setAdminClips] = useState<AdminClip[]>([])
   const [clipsLoading, setClipsLoading] = useState(false)
+  const [previewAdminClip, setPreviewAdminClip] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState('active')
   const [editingKey, setEditingKey] = useState<string | null>(null)
@@ -550,8 +551,8 @@ export default function AdminPage() {
         {/* CLIPS */}
         {tab === 'clips' && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <p className="text-xs text-white/40">All stored clips. Free tier expires in 24h, Pro/Agency in 15 days.</p>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <p className="text-xs text-white/40">All stored clips. Free=12h, Pro/Agency=15 days.</p>
               <div className="flex gap-2">
                 <button onClick={loadClips} className="text-xs bg-white/5 text-white/50 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10">
                   ↻ Refresh
@@ -559,6 +560,13 @@ export default function AdminPage() {
                 <button onClick={purgeExpiredClips}
                   className="text-xs bg-red-500/10 text-red-400 border border-red-500/20 px-3 py-1.5 rounded-lg hover:bg-red-500/20">
                   🗑 Purge expired
+                </button>
+                <button onClick={async () => {
+                  if (!confirm('Delete ALL stored clips permanently? This cannot be undone.')) return
+                  const r = await authFetch('/api/admin/clips', { method: 'DELETE', body: JSON.stringify({ deleteAll: true, force: true }) })
+                  const d = await r.json(); toast(`Purged ${d.deleted} clips`); loadClips()
+                }} className="text-xs bg-red-900/20 text-red-500 border border-red-900/30 px-3 py-1.5 rounded-lg hover:bg-red-900/30">
+                  💥 Purge ALL
                 </button>
               </div>
             </div>
@@ -572,10 +580,11 @@ export default function AdminPage() {
                 const expiresIn = clip.file_expires_at
                   ? Math.ceil((new Date(clip.file_expires_at).getTime() - Date.now()) / (1000 * 60 * 60))
                   : null
+                const isPreview = previewAdminClip === clip.id
 
                 return (
-                  <div key={clip.id} className={`bg-white/5 border rounded-xl p-4 ${expired ? 'border-red-500/20' : 'border-white/10'}`}>
-                    <div className="flex items-start justify-between gap-4">
+                  <div key={clip.id} className={`bg-white/5 border rounded-xl overflow-hidden ${expired ? 'border-red-500/20' : 'border-white/10'}`}>
+                    <div className="p-4 flex items-start justify-between gap-4">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1 flex-wrap">
                           <p className="text-sm font-medium truncate">{clip.title}</p>
@@ -595,16 +604,30 @@ export default function AdminPage() {
                         <div className="flex items-center gap-3 mt-1 text-xs text-white/30">
                           {clip.file_size_mb && <span>{clip.file_size_mb.toFixed(1)} MB</span>}
                           <span>{new Date(clip.created_at).toLocaleDateString()}</span>
-                          {clip.file_url && !expired && (
-                            <a href={clip.file_url} target="_blank" rel="noopener" className="text-[#FF6B00] hover:underline">Download</a>
-                          )}
                         </div>
                       </div>
-                      <button onClick={() => deleteClip(clip.id, clip.storage_path)}
-                        className="text-xs bg-red-500/10 text-red-400 px-3 py-1.5 rounded-lg hover:bg-red-500/20 flex-shrink-0">
-                        Delete
-                      </button>
+                      <div className="flex gap-2 flex-shrink-0">
+                        {clip.file_url && !expired && (
+                          <>
+                            <button onClick={() => setPreviewAdminClip(isPreview ? null : clip.id)}
+                              className={`text-xs px-2.5 py-1.5 rounded-lg transition-colors ${isPreview ? 'bg-white/20 text-white' : 'bg-white/10 text-white/50 hover:bg-white/20'}`}>
+                              {isPreview ? '▼' : '▶'}
+                            </button>
+                            <a href={clip.file_url} target="_blank" rel="noopener"
+                              className="text-xs bg-white/10 text-white/50 px-2.5 py-1.5 rounded-lg hover:bg-white/20">⬇️</a>
+                          </>
+                        )}
+                        <button onClick={() => deleteClip(clip.id, clip.storage_path)}
+                          className="text-xs bg-red-500/10 text-red-400 px-2.5 py-1.5 rounded-lg hover:bg-red-500/20">
+                          Delete
+                        </button>
+                      </div>
                     </div>
+                    {isPreview && clip.file_url && (
+                      <div className="border-t border-white/10 bg-black p-3">
+                        <video src={clip.file_url} controls className="w-full rounded-lg" style={{ maxHeight: '260px' }} />
+                      </div>
+                    )}
                   </div>
                 )
               })}

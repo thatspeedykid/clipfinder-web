@@ -40,10 +40,15 @@ export async function DELETE(req: NextRequest) {
   const { clipId, storagePath, deleteAll } = await req.json()
 
   if (deleteAll) {
-    // Delete all expired clips
-    const { data: expired } = await supabase.rpc('get_expired_clips')
+    const supabase = createAdminClient()
+    let query = supabase.from('clips').select('id, storage_path')
+    if (!body.force) {
+      // Only expired
+      query = query.lt('file_expires_at', new Date().toISOString())
+    }
+    const { data: toDelete } = await query.not('storage_path', 'is', null)
     let deleted = 0
-    for (const clip of expired ?? []) {
+    for (const clip of toDelete ?? []) {
       if (clip.storage_path) {
         await supabase.storage.from('clips').remove([clip.storage_path])
       }

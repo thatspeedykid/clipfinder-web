@@ -1,6 +1,4 @@
 // src/app/api/jobs/[jobId]/route.ts
-// Job status polling — frontend hits this every 2s to check progress
-
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
 
@@ -11,7 +9,6 @@ export async function GET(
   try {
     const supabase = createAdminClient()
 
-    // Auth from header or cookie
     const authHeader = req.headers.get('authorization')
     if (!authHeader) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -21,19 +18,17 @@ export async function GET(
 
     const { jobId } = params
 
-    // Fetch job
     const { data: job, error: jobError } = await supabase
       .from('jobs')
       .select('*')
       .eq('id', jobId)
-      .eq('user_id', user.id) // security: only own jobs
+      .eq('user_id', user.id)
       .single()
 
     if (jobError || !job) {
       return NextResponse.json({ error: 'Job not found' }, { status: 404 })
     }
 
-    // If done, also fetch clips
     let clips = null
     if (job.status === 'done') {
       const { data } = await supabase
@@ -41,7 +36,29 @@ export async function GET(
         .select('*')
         .eq('job_id', jobId)
         .order('score', { ascending: false })
-      clips = data
+
+      // Regenerate fresh signed URLs for clips that have storage_path
+      if (data) {
+        clips = await Promise.all(data.map(async (clip) => {
+          if (clip.storage_path) {
+            try {
+              // Check if expired
+              const isExpired = clip.file_expires_at && new Date(clip.file_expires_at) < new Date()
+              if (isExpired) {
+                return { ...clip, file_url: null }
+              }
+              // Generate fresh signed URL valid for 1 hour
+              const { data: signed } = await supabase.storage
+                .from('clips')
+                .createSignedUrl(clip.storage_path, 3600)
+              return { ...clip, file_url: signed?.signedUrl ?? clip.file_url }
+            } catch {
+              return clip
+            }
+          }
+          return clip
+        }))
+      }
     }
 
     return NextResponse.json({ job, clips })
