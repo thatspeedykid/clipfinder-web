@@ -37,13 +37,12 @@ export async function DELETE(req: NextRequest) {
   if (error) return error
 
   const supabase = createAdminClient()
-  const { clipId, storagePath, deleteAll } = await req.json()
+  const body = await req.json()
+  const { clipId, storagePath, deleteAll, force } = body
 
   if (deleteAll) {
-    const supabase = createAdminClient()
     let query = supabase.from('clips').select('id, storage_path')
-    if (!body.force) {
-      // Only expired
+    if (!force) {
       query = query.lt('file_expires_at', new Date().toISOString())
     }
     const { data: toDelete } = await query.not('storage_path', 'is', null)
@@ -55,17 +54,20 @@ export async function DELETE(req: NextRequest) {
       await supabase.from('clips').update({ file_url: null, storage_path: null }).eq('id', clip.id)
       deleted++
     }
+    // Also count clips without storage_path if force
+    if (force) {
+      const { data: noStorage } = await supabase.from('clips').select('id').is('storage_path', null)
+      deleted += (noStorage ?? []).length
+    }
     return NextResponse.json({ success: true, deleted })
   }
 
   if (!clipId) return NextResponse.json({ error: 'clipId required' }, { status: 400 })
 
-  // Delete from storage
   if (storagePath) {
     await supabase.storage.from('clips').remove([storagePath])
   }
 
-  // Clear file fields but keep clip record
   await supabase
     .from('clips')
     .update({ file_url: null, storage_path: null, file_expires_at: null })
