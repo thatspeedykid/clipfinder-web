@@ -331,8 +331,103 @@ def cut_clip_section(url, start_ts, end_ts, output_path, cookies_file=None, sour
     return run_yt_dlp(cmd)
 
 
+
+def _upload_clip_to_storage(sb, clip_path, user_id, job_id, clip_num, clip_id, start_ts):
+    """Upload a clip file to Supabase Storage and update the clip record."""
+    from datetime import datetime, timedelta
+    try:
+        profile_res = sb.table("profiles").select("tier").eq("id", user_id).single().execute()
+        tier = (profile_res.data or {}).get("tier", "free")
+        expires = datetime.utcnow() + (timedelta(hours=12) if tier == "free" else timedelta(days=15))
+        storage_path = f"{user_id}/{job_id}/clip_{clip_num}.mp4"
+        with open(clip_path, "rb") as f:
+            clip_data = f.read()
+        sb.storage.from_("clips").upload(path=storage_path, file=clip_data, file_options={"content-type": "video/mp4", "upsert": "true"})
+        sign_seconds = int((expires - datetime.utcnow()).total_seconds())
+        signed = sb.storage.from_("clips").create_signed_url(storage_path, sign_seconds)
+        file_url = signed.get("signedURL", "")
+        size_mb = round(clip_path.stat().st_size / 1024 / 1024, 2)
+        if clip_id:
+            sb.table("clips").update({
+                "file_url": file_url, "file_expires_at": expires.isoformat(),
+                "file_size_mb": size_mb, "storage_path": storage_path
+            }).eq("id", clip_id).execute()
+        print(f"[storage] clip {clip_num} uploaded {size_mb}MB — expires {expires.strftime('%Y-%m-%d %H:%M')} UTC")
+        clip_path.unlink(missing_ok=True)
+        return True
+    except Exception as e:
+        print(f"[storage] upload failed for clip {clip_num}: {e}")
+        clip_path.unlink(missing_ok=True)
+        return False
+
+
+def _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, seg_start_offset=0):
+    """Cut clips at given timestamps from HLS URL and upload."""
+    # Insert clip rows
+    clip_rows = []
+    for ec in extension_clips:
+        start = ec.get("start", "00:00:00")
+        end = ec.get("end", "00:01:00")
+        clip_rows.append({
+            "job_id": job_id, "user_id": user_id,
+            "title": ec.get("label") or f"Extension clip {start}–{end}",
+            "summary": "Clipped via browser extension",
+            "start_ts": start, "end_ts": end,
+            "duration_sec": int(ts_to_seconds(end) - ts_to_seconds(start)), "score": 80,
+        })
+    sb.table("clips").insert(clip_rows).execute()
+    db_clips = sb.table("clips").select("id, start_ts").eq("job_id", job_id).execute()
+    clip_id_map = {r["start_ts"]: r["id"] for r in (db_clips.data or [])}
+
+    for i, ec in enumerate(extension_clips):
+        start_ts = ec.get("start", "00:00:00")
+        end_ts = ec.get("end", "00:01:00")
+        clip_path = tmp / f"clip_{i+1}.mp4"
+        start_sec = ts_to_seconds(start_ts) + seg_start_offset
+        duration = ts_to_seconds(end_ts) - ts_to_seconds(start_ts)
+        result = subprocess.run([
+            "ffmpeg", "-ss", str(start_sec), "-i", source_url,
+            "-t", str(duration), "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+            str(clip_path), "-y", "-loglevel", "error"
+        ], capture_output=True, text=True, timeout=300)
+        if result.returncode == 0 and clip_path.exists():
+            clip_id = clip_id_map.get(start_ts, "")
+            _upload_clip_to_storage(sb, clip_path, user_id, job_id, i+1, clip_id, start_ts)
+
+    update_job(sb, job_id, "done", 100, f"Done! {len(extension_clips)} clips ready", {"clips_found": len(extension_clips)})
+    print(f"[done] job {job_id[:8]} — {len(extension_clips)} extension clips")
+
+
+def _upload_clips_from_hls(sb, tmp, source_url, clips_data, clip_id_map, job_id, user_id, seg_start_offset=0):
+    """Cut and upload AI-identified clips from HLS URL."""
+    for i, clip in enumerate(clips_data):
+        start_ts = clip.get("start_ts", "00:00:00")
+        end_ts = clip.get("end_ts", "00:01:00")
+        clip_path = tmp / f"clip_{i+1}.mp4"
+        # Offset by segment start since transcript timestamps are relative to segment
+        start_sec = ts_to_seconds(start_ts) + seg_start_offset
+        duration = ts_to_seconds(end_ts) - ts_to_seconds(start_ts)
+        print(f"[extension] cutting clip {i+1}: {start_ts}+{seg_start_offset}s offset")
+        result = subprocess.run([
+            "ffmpeg", "-ss", str(start_sec), "-i", source_url,
+            "-t", str(duration), "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+            str(clip_path), "-y", "-loglevel", "error"
+        ], capture_output=True, text=True, timeout=300)
+        if result.returncode == 0 and clip_path.exists():
+            clip_id = clip_id_map.get(start_ts, "")
+            _upload_clip_to_storage(sb, clip_path, user_id, job_id, i+1, clip_id, start_ts)
+        else:
+            print(f"[extension] ffmpeg failed clip {i+1}: {result.stderr[-100:]}")
+
+    done_count = len(clips_data)
+    update_job(sb, job_id, "done", 100, f"Done! {done_count} clips ready", {"clips_found": done_count})
+    print(f"[done] job {job_id[:8]} — {done_count} extension clips")
+
+
 @app.function(image=image, secrets=secrets, timeout=600, memory=2048, cpu=2.0)
-def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto", extension_clips: list = None):
+def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto", extension_clips: list = None, streamer_name: str = ""):
     from supabase import create_client
     import requests as req
 
@@ -363,6 +458,77 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
         update_job(sb, job_id, "downloading", 5, "Fetching video info...")
         video_title = ""
         video_duration = 0
+
+        # Detect HLS stream URLs from browser extension (stream.kick.com or .m3u8)
+        is_hls_stream = "stream.kick.com" in source_url or ".m3u8" in source_url
+
+        # For HLS streams from extension: download segment audio, transcribe, AI finds best moment
+        if is_hls_stream and extension_clips and len(extension_clips) > 0:
+            print(f"[extension] HLS stream — downloading segment audio for AI analysis")
+            ec0 = extension_clips[0]
+            seg_start = ts_to_seconds(ec0.get("start", "00:00:00"))
+            seg_end = ts_to_seconds(ec0.get("end", "00:04:00"))
+            seg_duration = seg_end - seg_start
+            video_title = streamer_name or "Extension clip"
+            sb.table("jobs").update({"video_title": video_title}).eq("id", job_id).execute()
+
+            # Download just the segment audio from HLS
+            update_job(sb, job_id, "downloading", 15, "Downloading stream segment...")
+            seg_audio = tmp / "seg_audio.mp3"
+            result = subprocess.run([
+                "ffmpeg", "-ss", str(seg_start), "-i", source_url,
+                "-t", str(seg_duration), "-vn",
+                "-ar", "16000", "-ac", "1", "-b:a", "32k",
+                str(seg_audio), "-y", "-loglevel", "error"
+            ], capture_output=True, text=True, timeout=300)
+
+            if result.returncode != 0 or not seg_audio.exists():
+                # Fallback: cut at timestamps directly without AI
+                print(f"[extension] audio download failed, cutting directly at timestamps")
+                _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, seg_start)
+                return
+
+            print(f"[extension] segment audio: {seg_audio.stat().st_size/1024/1024:.1f}MB")
+
+            # Transcribe
+            update_job(sb, job_id, "transcribing", 35, "Transcribing stream segment...")
+            transcript_text = ""
+            try:
+                transcript_text = transcribe_with_groq(seg_audio, os.environ["GROQ_API_KEY"])
+                print(f"[extension] transcript: {len(transcript_text)} chars")
+            except Exception as e:
+                print(f"[extension] transcription failed: {e}")
+
+            if not transcript_text:
+                print("[extension] no transcript, cutting at timestamps")
+                _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, seg_start)
+                return
+
+            # AI analysis
+            update_job(sb, job_id, "analyzing", 50, "AI finding best moment...")
+            app_url = os.environ.get("NEXT_PUBLIC_APP_URL", "").rstrip("/")
+            try:
+                analyze_resp = req.post(
+                    f"{app_url}/api/analyze",
+                    json={"jobId": job_id, "transcript": transcript_text, "videoTitle": video_title,
+                          "mode": mode, "userId": user_id, "names": streamer_name, "clipsTarget": 3,
+                          "segmentOffsetSec": seg_start},
+                    headers={"Authorization": f"Bearer {os.environ['WORKER_SECRET']}", "Content-Type": "application/json"},
+                    timeout=120,
+                )
+                if not analyze_resp.ok:
+                    raise Exception(f"analyze {analyze_resp.status_code}")
+                clips_data = analyze_resp.json().get("clips", [])
+                clip_id_map = {c.get("start_ts", ""): c.get("id", "") for c in clips_data}
+            except Exception as e:
+                print(f"[extension] AI failed: {e}, cutting at timestamps")
+                _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, seg_start)
+                return
+
+            # Cut AI-identified clips from HLS
+            update_job(sb, job_id, "cutting", 70, f"Cutting {len(clips_data)} clips...")
+            _upload_clips_from_hls(sb, tmp, source_url, clips_data, clip_id_map, job_id, user_id, seg_start)
+            return
 
         # For Kick: get direct URL ONCE here, reuse for audio + cutting
         kick_direct_url = None
@@ -486,7 +652,7 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
             print(f"[analyze] sending secret: {worker_secret_val[:6]}... to {app_url}/api/analyze")
             analyze_resp = req.post(
                 f"{app_url}/api/analyze",
-                json={"jobId": job_id, "transcript": transcript_text, "videoTitle": video_title, "mode": mode, "userId": user_id},
+                json={"jobId": job_id, "transcript": transcript_text, "videoTitle": video_title, "mode": mode, "userId": user_id, "names": streamer_name},
                 headers={"Authorization": f"Bearer {os.environ['WORKER_SECRET']}", "Content-Type": "application/json"},
                 timeout=120,
             )
@@ -746,6 +912,7 @@ def start(body: dict):
     mode = body.get("mode", "auto")
     auth_token = body.get("authToken", "")
     extension_clips = body.get("extensionClips", None)  # pre-defined timestamps from browser extension
+    streamer_name = body.get("streamerName", "")  # streamer name from extension page
 
     worker_secret = os.environ.get("WORKER_SECRET", "")
     if worker_secret and auth_token != worker_secret:
@@ -753,7 +920,7 @@ def start(body: dict):
     if not job_id or not source_url or not user_id:
         return {"error": "jobId, url, and userId required"}, 400
 
-    process_video.spawn(job_id, source_url, user_id, mode, extension_clips)
+    process_video.spawn(job_id, source_url, user_id, mode, extension_clips, streamer_name)
     return {"success": True, "jobId": job_id}
 
 

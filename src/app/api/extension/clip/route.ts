@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
 
     // ── Validate body ────────────────────────────────────────────────────────
     const body = await req.json()
-    const { vod_url, clips, mode = 'auto', batch = false, stream_id } = body
+    const { vod_url, clips, streamer_name: streamerName = "", mode = 'auto', batch = false, stream_id } = body
 
     if (!vod_url || typeof vod_url !== 'string') {
       return NextResponse.json({ error: 'vod_url is required.' }, { status: 400 })
