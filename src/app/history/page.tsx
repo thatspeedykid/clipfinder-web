@@ -62,12 +62,25 @@ export default function HistoryPage() {
       .order('created_at', { ascending: false })
       .range(from, to)
 
-    setJobs(data ?? [])
+    const jobList = data ?? []
+    setJobs(jobList)
     setTotalJobs(count ?? 0)
     setLoading(false)
+    // Auto-expand the most recent done job on first page
+    if (pg === 1) {
+      const firstDone = jobList.find((j: Job) => j.status === 'done')
+      if (firstDone) setExpandedJob(firstDone.id)
+    }
   }, [token])
 
   useEffect(() => { if (token) loadJobs(page) }, [token, page])
+
+  // Auto-load clips for auto-expanded job
+  useEffect(() => {
+    if (expandedJob && token && !jobClips[expandedJob]) {
+      loadClips(expandedJob)
+    }
+  }, [expandedJob, token])
 
   const totalPages = Math.ceil(totalJobs / JOBS_PER_PAGE)
 
@@ -80,11 +93,13 @@ export default function HistoryPage() {
     const res = await fetch(`/api/jobs/${jobId}`, { headers: { Authorization: `Bearer ${token}` } })
     if (res.ok) {
       const d = await res.json()
-      // Regenerate signed URLs for clips with storage_path but no file_url
+      // Always regenerate signed URLs from storage_path (DB URLs expire)
       const clips = await Promise.all((d.clips ?? []).map(async (clip: Clip) => {
-        if (!clip.file_url && clip.storage_path) {
-          const { data: signed } = await supabase.storage.from('clips').createSignedUrl(clip.storage_path, 3600)
-          return { ...clip, file_url: signed?.signedUrl }
+        if (clip.storage_path) {
+          try {
+            const { data: signed } = await supabase.storage.from('clips').createSignedUrl(clip.storage_path, 3600)
+            if (signed?.signedUrl) return { ...clip, file_url: signed.signedUrl }
+          } catch {}
         }
         return clip
       }))

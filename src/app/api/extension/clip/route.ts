@@ -160,6 +160,7 @@ export async function POST(req: NextRequest) {
             mode,
             authToken: WORKER_SECRET,
             extensionClips: validatedClips,
+            streamerName,
           }),
         }).catch(err => console.error('[extension/clip] worker fire failed:', err))
       }

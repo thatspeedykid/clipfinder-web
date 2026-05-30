@@ -385,6 +385,8 @@ def _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, s
         clip_path = tmp / f"clip_{i+1}.mp4"
         start_sec = ts_to_seconds(start_ts) + seg_start_offset
         duration = ts_to_seconds(end_ts) - ts_to_seconds(start_ts)
+        # Enforce duration limits
+        duration = max(CLIP_MIN_SEC, min(CLIP_MAX_SEC, duration))
         result = subprocess.run([
             "ffmpeg", "-ss", str(start_sec), "-i", source_url,
             "-t", str(duration), "-c:v", "libx264", "-preset", "fast", "-crf", "23",
@@ -409,6 +411,8 @@ def _upload_clips_from_hls(sb, tmp, source_url, clips_data, clip_id_map, job_id,
         start_sec = ts_to_seconds(start_ts) + seg_start_offset
         duration = ts_to_seconds(end_ts) - ts_to_seconds(start_ts)
         print(f"[extension] cutting clip {i+1}: {start_ts}+{seg_start_offset}s offset")
+        # Enforce duration limits
+        duration = max(CLIP_MIN_SEC, min(CLIP_MAX_SEC, duration))
         result = subprocess.run([
             "ffmpeg", "-ss", str(start_sec), "-i", source_url,
             "-t", str(duration), "-c:v", "libx264", "-preset", "fast", "-crf", "23",
@@ -472,6 +476,35 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
             video_title = streamer_name or "Extension clip"
             sb.table("jobs").update({"video_title": video_title}).eq("id", job_id).execute()
 
+            # First: upload the FULL uncut segment as clip 0 (extension only)
+            update_job(sb, job_id, "downloading", 10, "Saving full clip...")
+            full_clip_path = tmp / "full_clip.mp4"
+            seg_duration_capped = min(seg_duration, 240)  # cap full clip at 4min
+            full_cut = subprocess.run([
+                "ffmpeg", "-ss", str(seg_start), "-i", source_url,
+                "-t", str(seg_duration_capped), "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+                str(full_clip_path), "-y", "-loglevel", "error"
+            ], capture_output=True, text=True, timeout=300)
+
+            full_clip_id = None
+            if full_cut.returncode == 0 and full_clip_path.exists():
+                prefix = streamer_name.capitalize() if streamer_name else "Extension"
+                full_row = [{
+                    "job_id": job_id, "user_id": user_id,
+                    "title": f"{prefix} — Full clip",
+                    "summary": f"Full uncut segment clipped via extension{' from ' + streamer_name if streamer_name else ''}",
+                    "start_ts": ec0.get("start", "00:00:00"),
+                    "end_ts": ec0.get("end", "00:04:00"),
+                    "duration_sec": int(seg_duration_capped), "score": 85,
+                }]
+                sb.table("clips").insert(full_row).execute()
+                full_db = sb.table("clips").select("id").eq("job_id", job_id).order("created_at").limit(1).execute()
+                if full_db.data:
+                    full_clip_id = full_db.data[0]["id"]
+                    _upload_clip_to_storage(sb, full_clip_path, user_id, job_id, 0, full_clip_id, ec0.get("start", "00:00:00"))
+                    print(f"[extension] full clip uploaded")
+
             # Download just the segment audio from HLS
             update_job(sb, job_id, "downloading", 15, "Downloading stream segment...")
             seg_audio = tmp / "seg_audio.mp3"
@@ -511,8 +544,10 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
                 analyze_resp = req.post(
                     f"{app_url}/api/analyze",
                     json={"jobId": job_id, "transcript": transcript_text, "videoTitle": video_title,
-                          "mode": mode, "userId": user_id, "names": streamer_name, "clipsTarget": 3,
-                          "segmentOffsetSec": seg_start},
+                          "mode": mode, "userId": user_id, "names": streamer_name, "clipsTarget": 5,
+                          "segmentOffsetSec": seg_start,
+                          "minDurationSec": 30,
+                          "maxDurationSec": 180},
                     headers={"Authorization": f"Bearer {os.environ['WORKER_SECRET']}", "Content-Type": "application/json"},
                     timeout=120,
                 )
@@ -701,6 +736,18 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
             duration = ts_to_seconds(end_ts) - ts_to_seconds(start_ts)
             if duration <= 0:
                 continue
+            # Enforce 30s min / 3min max
+            if duration < CLIP_MIN_SEC:
+                print(f"[cut] clip {i+1} too short ({duration:.0f}s), skipping")
+                continue
+            if duration > CLIP_MAX_SEC:
+                # Trim to max from start
+                new_end_sec = ts_to_seconds(start_ts) + CLIP_MAX_SEC
+                h, rem = divmod(int(new_end_sec), 3600)
+                m, s = divmod(rem, 60)
+                end_ts = f"{h:02d}:{m:02d}:{s:02d}"
+                duration = CLIP_MAX_SEC
+                print(f"[cut] clip {i+1} trimmed to {CLIP_MAX_SEC}s")
 
             progress = 70 + int((i / len(clips)) * 25)
             update_job(sb, job_id, "cutting", progress, f"Cutting clip {i+1}/{len(clips)}")

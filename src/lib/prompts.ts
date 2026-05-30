@@ -96,6 +96,8 @@ Given this timestamped transcript, select segments totaling approximately {targe
 CRITICAL RULES:
 - TOTAL combined duration MUST reach AT LEAST {target_sec} seconds
 - Each individual segment MUST be at least {min_seg_sec} seconds long
+- Each individual segment MUST NOT exceed {max_seg_sec} seconds (3 minutes maximum)
+- Trim or split segments that would exceed {max_seg_sec} seconds
 - Prefer FEWER LONGER segments over many short ones
 - Skip dead air, filler ("um", "uh", "like"), and boring transitions
 - Every segment MUST end on a completed sentence

@@ -123,14 +123,13 @@ export default function DashboardPage() {
     fetch('/api/flags/sources').then(r => r.json()).then(setSourceFlags).catch(() => {})
   }, [user])
 
-  // On mount: restore active job from localStorage
+  // On mount: restore active job from localStorage + poll for any active jobs (incl extension)
   useEffect(() => {
     if (!user) return
     const saved = localStorage.getItem(`cf_active_job_${user.id}`)
     if (saved) {
       try {
         const parsed = JSON.parse(saved)
-        // Only restore if not too old (12h)
         if (Date.now() - parsed.savedAt < 12 * 60 * 60 * 1000) {
           setJob(parsed.job)
           if (parsed.url) setUrl(parsed.url)
@@ -139,6 +138,24 @@ export default function DashboardPage() {
         }
       } catch {}
     }
+
+    // Also poll server every 3s for ANY active job — catches extension jobs without refresh
+    const scanForActiveJobs = async () => {
+      if (!tokenRef.current) return
+      const r = await fetch('/api/jobs', { headers: { Authorization: `Bearer ${tokenRef.current}` } })
+      if (!r.ok) return
+      const { jobs: activeJobs } = await r.json()
+      if (activeJobs?.length > 0) {
+        setJob(prev => {
+          // Only update if no active job is tracked, or if current one is done
+          if (!prev || ['done','error','cancelled'].includes(prev.status)) return activeJobs[0]
+          return prev
+        })
+      }
+    }
+    scanForActiveJobs()
+    const scanInterval = setInterval(scanForActiveJobs, 3000)
+    return () => clearInterval(scanInterval)
   }, [user])
 
   // Save active job to localStorage for persistence
