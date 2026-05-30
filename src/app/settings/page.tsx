@@ -170,16 +170,18 @@ export default function SettingsPage() {
         <div className={`fixed top-4 right-4 z-50 text-white text-sm px-4 py-2 rounded-xl shadow-lg ${toastType === 'error' ? 'bg-red-500' : 'bg-[#FF6B00]'}`}>{toast}</div>
       )}
 
-      <div className="flex-1 max-w-2xl mx-auto w-full px-4 py-10">
+      <div className="flex-1 max-w-4xl mx-auto w-full px-4 py-10">
         <h1 className="text-xl font-semibold mb-8">Settings</h1>
 
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+
         {/* Account */}
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-5 mb-5">
+        <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
           <h2 className="text-sm font-medium mb-4 text-white/60">Account</h2>
           <div className="space-y-3">
             <div className="flex justify-between text-sm">
               <span className="text-white/50">Email</span>
-              <span className="text-white/80">{user?.email}</span>
+              <span className="text-white/80 truncate ml-4">{user?.email}</span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-white/50">Plan</span>
@@ -194,7 +196,7 @@ export default function SettingsPage() {
         </div>
 
         {/* Change password */}
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-5 mb-5">
+        <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
           <h2 className="text-sm font-medium mb-4 text-white/60">Change password</h2>
           <form onSubmit={changePassword} className="space-y-3">
             <input type="password" placeholder="Current password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} required
@@ -211,7 +213,7 @@ export default function SettingsPage() {
         </div>
 
         {/* 2FA */}
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-5 mb-5">
+        <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-sm font-medium text-white/60">Two-factor authentication</h2>
@@ -235,29 +237,27 @@ export default function SettingsPage() {
           {setupTotp && (
             <div className="space-y-4">
               <div className="bg-black/30 rounded-xl p-4 text-center">
-                <p className="text-xs text-white/40 mb-3">Scan this QR code with Google Authenticator or Authy</p>
-                {totpQR && <img src={totpQR} alt="2FA QR Code" className="mx-auto w-40 h-40 rounded-lg" />}
+                <p className="text-xs text-white/40 mb-3">Scan with Google Authenticator or Authy</p>
+                {totpQR && <img src={totpQR} alt="2FA QR Code" className="mx-auto w-36 h-36 rounded-lg" />}
                 {totpSecret && (
                   <div className="mt-3">
-                    <p className="text-xs text-white/30 mb-1">Or enter this code manually:</p>
+                    <p className="text-xs text-white/30 mb-1">Or enter manually:</p>
                     <p className="text-xs font-mono text-white/60 bg-white/5 rounded px-3 py-1.5 inline-block tracking-wider">{totpSecret}</p>
                   </div>
                 )}
               </div>
               <form onSubmit={verifyAndEnableTotp} className="space-y-3">
-                <input type="text" placeholder="Enter 6-digit code from app" value={totpCode}
+                <input type="text" placeholder="6-digit code from app" value={totpCode}
                   onChange={e => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                   maxLength={6} pattern="\d{6}" required
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-[#FF6B00] text-center tracking-widest text-lg" />
                 <div className="flex gap-2">
                   <button type="submit" disabled={enablingTotp || totpCode.length !== 6}
-                    className="flex-1 text-sm bg-[#FF6B00] text-white py-2.5 rounded-xl hover:bg-[#e55f00] disabled:opacity-50">
+                    className="flex-1 text-sm bg-[#FF6B00] text-white py-2.5 rounded-xl disabled:opacity-50">
                     {enablingTotp ? 'Verifying...' : 'Enable 2FA'}
                   </button>
                   <button type="button" onClick={() => { setSetupTotp(false); setTotpQR(''); setTotpSecret(''); setTotpCode('') }}
-                    className="flex-1 text-sm bg-white/10 text-white/50 py-2.5 rounded-xl hover:bg-white/15">
-                    Cancel
-                  </button>
+                    className="flex-1 text-sm bg-white/10 text-white/50 py-2.5 rounded-xl">Cancel</button>
                 </div>
               </form>
             </div>
@@ -265,13 +265,13 @@ export default function SettingsPage() {
         </div>
 
         {/* YouTube cookies */}
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-5 mb-5">
+        <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
           <h2 className="text-sm font-medium mb-1 text-white/60">YouTube cookies</h2>
           <p className="text-xs text-white/30 mb-4 leading-relaxed">
-            Bypass age restrictions and login-required videos. Export using the{' '}
+            Bypass age restrictions. Export using{' '}
             <a href="https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc"
-              target="_blank" rel="noopener" className="text-[#FF6B00] underline">Get cookies.txt</a>{' '}
-            Chrome extension. File is read locally — never stored on our servers.
+              target="_blank" rel="noopener" className="text-[#FF6B00] underline">Get cookies.txt</a>.
+            File is read locally — never stored on our servers.
           </p>
 
           {cookieStatus?.has_cookies && (
@@ -290,18 +290,18 @@ export default function SettingsPage() {
           )}
 
           <div onClick={() => fileInputRef.current?.click()}
-            className="border-2 border-dashed border-white/10 hover:border-white/20 rounded-xl p-6 text-center cursor-pointer transition-colors mb-3">
+            className="border-2 border-dashed border-white/10 hover:border-white/20 rounded-xl p-5 text-center cursor-pointer transition-colors mb-3">
             <input ref={fileInputRef} type="file" accept=".txt" onChange={handleFileSelect} className="hidden" />
             {selectedFileName ? (
-              <div><p className="text-sm text-green-400 font-medium">✓ {selectedFileName}</p><p className="text-xs text-white/30 mt-1">Click to choose different file</p></div>
+              <div><p className="text-sm text-green-400 font-medium">✓ {selectedFileName}</p><p className="text-xs text-white/30 mt-1">Click to change</p></div>
             ) : (
-              <div><p className="text-2xl mb-2">📄</p><p className="text-sm text-white/60">Click to upload cookies.txt</p><p className="text-xs text-white/30 mt-1">Only .txt files · Never stored on servers</p></div>
+              <div><p className="text-2xl mb-2">📄</p><p className="text-sm text-white/60">Click to upload cookies.txt</p><p className="text-xs text-white/30 mt-1">.txt files only</p></div>
             )}
           </div>
 
           {cookiePreview && (
             <div className="bg-black/30 rounded-xl px-4 py-3 mb-3">
-              <p className="text-xs text-white/40 mb-1">Preview (first 3 lines)</p>
+              <p className="text-xs text-white/40 mb-1">Preview</p>
               <p className="text-xs font-mono text-white/50 leading-relaxed">{cookiePreview.split('\n').slice(0, 3).join('\n')}</p>
             </div>
           )}
@@ -312,13 +312,15 @@ export default function SettingsPage() {
           </button>
         </div>
 
-        {/* Danger zone */}
-        <div className="bg-red-500/5 border border-red-500/20 rounded-2xl p-5">
+        {/* Danger zone — spans full width */}
+        <div className="lg:col-span-2 bg-red-500/5 border border-red-500/20 rounded-2xl p-5">
           <h2 className="text-sm font-medium mb-3 text-red-400/80">Danger zone</h2>
           <button onClick={async () => { await supabase.auth.signOut(); router.replace('/') }}
             className="text-xs text-red-400 border border-red-500/20 px-3 py-1.5 rounded-lg hover:bg-red-500/10">
             Sign out of all devices
           </button>
+        </div>
+
         </div>
       </div>
     </main>
