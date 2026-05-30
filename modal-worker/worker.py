@@ -332,7 +332,7 @@ def cut_clip_section(url, start_ts, end_ts, output_path, cookies_file=None, sour
 
 
 @app.function(image=image, secrets=secrets, timeout=600, memory=2048, cpu=2.0)
-def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"):
+def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto", extension_clips: list = None):
     from supabase import create_client
     import requests as req
 
@@ -422,56 +422,96 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
         audio_path = compress_audio_if_needed(audio_path, tmp)
         print(f"[audio] {audio_path.stat().st_size/1024/1024:.1f}MB")
 
-        # ── Step 3: Transcribe ─────────────────────────────────────────────────
-        update_job(sb, job_id, "transcribing", 35, "Transcribing audio...")
-        transcript_text = ""
+        # ── Extension clips fast path ──────────────────────────────────────────
+        # If the browser extension pre-specified timestamps, skip transcription
+        # and AI analysis entirely — go straight to cutting.
+        if extension_clips and len(extension_clips) > 0:
+            print(f"[extension] {len(extension_clips)} pre-specified clips — skipping transcription & AI")
+            update_job(sb, job_id, "cutting", 70, f"Cutting {len(extension_clips)} extension clips...")
 
-        if use_groq:
-            try:
-                transcript_text = transcribe_with_groq(audio_path, os.environ["GROQ_API_KEY"])
-            except Exception as e:
-                print(f"[transcribe] Groq failed: {e}")
+            # Insert clip rows into DB so they show up in history
+            clip_rows = []
+            for ec in extension_clips:
+                start = ec.get("start", "00:00:00")
+                end = ec.get("end", "00:01:00")
+                start_sec = ts_to_seconds(start)
+                end_sec = ts_to_seconds(end)
+                clip_rows.append({
+                    "job_id": job_id,
+                    "user_id": user_id,
+                    "title": ec.get("label") or f"Extension clip {start}–{end}",
+                    "summary": "Clipped via browser extension",
+                    "start_ts": start,
+                    "end_ts": end,
+                    "duration_sec": int(end_sec - start_sec),
+                    "score": 80,
+                })
+            sb.table("clips").insert(clip_rows).execute()
 
-        if not transcript_text:
-            err = "Transcription failed"
-            update_job(sb, job_id, "error", 0, err, {"error_msg": err})
-            return
+            # Fetch back with real UUIDs
+            db_clips = sb.table("clips").select("id, start_ts").eq("job_id", job_id).execute()
+            clip_id_map = {r["start_ts"]: r["id"] for r in (db_clips.data or [])}
 
-        sb.table("jobs").update({"transcript": transcript_text}).eq("id", job_id).execute()
-        update_job(sb, job_id, "analyzing", 50, "AI finding best clips...")
+            # Build clips list in same format as AI output
+            clips = []
+            for ec in extension_clips:
+                clips.append({
+                    "start_ts": ec.get("start", "00:00:00"),
+                    "end_ts": ec.get("end", "00:01:00"),
+                    "id": clip_id_map.get(ec.get("start", ""), ""),
+                })
 
-        # ── Step 4: AI analysis ────────────────────────────────────────────────
-        app_url = os.environ.get("NEXT_PUBLIC_APP_URL", "").rstrip("/")
-        worker_secret_val = os.environ.get('WORKER_SECRET', 'NOT_SET')
-        print(f"[analyze] sending secret: {worker_secret_val[:6]}... to {app_url}/api/analyze")
-        analyze_resp = req.post(
-            f"{app_url}/api/analyze",
-            json={"jobId": job_id, "transcript": transcript_text, "videoTitle": video_title, "mode": mode, "userId": user_id},
-            headers={"Authorization": f"Bearer {os.environ['WORKER_SECRET']}", "Content-Type": "application/json"},
-            timeout=120,
-        )
+        else:
+            # ── Step 3: Transcribe ─────────────────────────────────────────────
+            update_job(sb, job_id, "transcribing", 35, "Transcribing audio...")
+            transcript_text = ""
 
-        if not analyze_resp.ok:
-            err = f"AI analysis failed: {analyze_resp.status_code}"
-            try:
-                resp_json = analyze_resp.json()
-                err = resp_json.get("error", err)
-                details = resp_json.get("details", "")
-                if details:
-                    print(f"[analyze] error details: {details}")
-            except Exception:
-                pass
-            print(f"[analyze] full response: {analyze_resp.text[:500]}")
-            update_job(sb, job_id, "error", 0, err, {"error_msg": err})
-            return
+            if use_groq:
+                try:
+                    transcript_text = transcribe_with_groq(audio_path, os.environ["GROQ_API_KEY"])
+                except Exception as e:
+                    print(f"[transcribe] Groq failed: {e}")
 
-        clips = analyze_resp.json().get("clips", [])
-        if not clips:
-            err = "No clips found in this video"
-            update_job(sb, job_id, "error", 0, err, {"error_msg": err})
-            return
+            if not transcript_text:
+                err = "Transcription failed"
+                update_job(sb, job_id, "error", 0, err, {"error_msg": err})
+                return
 
-        update_job(sb, job_id, "cutting", 70, f"Cutting {len(clips)} clips...")
+            sb.table("jobs").update({"transcript": transcript_text}).eq("id", job_id).execute()
+            update_job(sb, job_id, "analyzing", 50, "AI finding best clips...")
+
+            # ── Step 4: AI analysis ───────────────────────────────────────────
+            app_url = os.environ.get("NEXT_PUBLIC_APP_URL", "").rstrip("/")
+            worker_secret_val = os.environ.get('WORKER_SECRET', 'NOT_SET')
+            print(f"[analyze] sending secret: {worker_secret_val[:6]}... to {app_url}/api/analyze")
+            analyze_resp = req.post(
+                f"{app_url}/api/analyze",
+                json={"jobId": job_id, "transcript": transcript_text, "videoTitle": video_title, "mode": mode, "userId": user_id},
+                headers={"Authorization": f"Bearer {os.environ['WORKER_SECRET']}", "Content-Type": "application/json"},
+                timeout=120,
+            )
+
+            if not analyze_resp.ok:
+                err = f"AI analysis failed: {analyze_resp.status_code}"
+                try:
+                    resp_json = analyze_resp.json()
+                    err = resp_json.get("error", err)
+                    details = resp_json.get("details", "")
+                    if details:
+                        print(f"[analyze] error details: {details}")
+                except Exception:
+                    pass
+                print(f"[analyze] full response: {analyze_resp.text[:500]}")
+                update_job(sb, job_id, "error", 0, err, {"error_msg": err})
+                return
+
+            clips = analyze_resp.json().get("clips", [])
+            if not clips:
+                err = "No clips found in this video"
+                update_job(sb, job_id, "error", 0, err, {"error_msg": err})
+                return
+
+            update_job(sb, job_id, "cutting", 70, f"Cutting {len(clips)} clips...")
 
         # Build a lookup: start_ts -> supabase clip id
         # The analyze API now returns clips with real UUIDs
@@ -584,6 +624,114 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
                 # Still delete local file even if upload fails
                 clip_path.unlink(missing_ok=True)
 
+        # ── Optional: Upload to Google Drive ──────────────────────────────────
+        try:
+            drive_secrets = sb.table("user_secrets").select(
+                "gdrive_access_token, gdrive_refresh_token, gdrive_token_expires_at"
+            ).eq("user_id", user_id).single().execute()
+
+            if drive_secrets.data and drive_secrets.data.get("gdrive_access_token"):
+                gdrive_access_token = drive_secrets.data["gdrive_access_token"]
+                gdrive_refresh_token = drive_secrets.data.get("gdrive_refresh_token", "")
+                expires_at_str = drive_secrets.data.get("gdrive_token_expires_at", "")
+
+                # Refresh token if expired
+                from datetime import datetime as dt
+                if expires_at_str:
+                    token_exp = dt.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+                    if dt.utcnow().replace(tzinfo=token_exp.tzinfo) > token_exp:
+                        print("[gdrive] access token expired, refreshing...")
+                        refresh_resp = req.post("https://oauth2.googleapis.com/token", data={
+                            "client_id": os.environ.get("GOOGLE_CLIENT_ID", ""),
+                            "client_secret": os.environ.get("GOOGLE_CLIENT_SECRET", ""),
+                            "refresh_token": gdrive_refresh_token,
+                            "grant_type": "refresh_token",
+                        })
+                        if refresh_resp.ok:
+                            new_tokens = refresh_resp.json()
+                            gdrive_access_token = new_tokens["access_token"]
+                            new_exp = dt.utcnow().replace(microsecond=0).isoformat()
+                            sb.table("user_secrets").update({
+                                "gdrive_access_token": gdrive_access_token,
+                                "gdrive_token_expires_at": new_exp,
+                            }).eq("user_id", user_id).execute()
+                        else:
+                            print(f"[gdrive] token refresh failed: {refresh_resp.status_code}")
+
+                # Get or create ClipFinder folder in Drive
+                folder_id = None
+                search_resp = req.get(
+                    "https://www.googleapis.com/drive/v3/files",
+                    params={"q": "name='ClipFinder' and mimeType='application/vnd.google-apps.folder' and trashed=false", "fields": "files(id)"},
+                    headers={"Authorization": f"Bearer {gdrive_access_token}"},
+                )
+                if search_resp.ok:
+                    files = search_resp.json().get("files", [])
+                    if files:
+                        folder_id = files[0]["id"]
+                    else:
+                        # Create folder
+                        create_resp = req.post(
+                            "https://www.googleapis.com/drive/v3/files",
+                            json={"name": "ClipFinder", "mimeType": "application/vnd.google-apps.folder"},
+                            headers={"Authorization": f"Bearer {gdrive_access_token}", "Content-Type": "application/json"},
+                        )
+                        if create_resp.ok:
+                            folder_id = create_resp.json().get("id")
+
+                # Upload completed clips from Supabase to Drive
+                drive_clips = sb.table("clips").select("id, title, storage_path").eq("job_id", job_id).execute()
+                uploaded_count = 0
+                for dc in (drive_clips.data or []):
+                    if not dc.get("storage_path"):
+                        continue
+                    try:
+                        # Download from Supabase Storage
+                        clip_bytes_resp = sb.storage.from_("clips").download(dc["storage_path"])
+                        if not clip_bytes_resp:
+                            continue
+                        clip_bytes = clip_bytes_resp if isinstance(clip_bytes_resp, bytes) else bytes(clip_bytes_resp)
+
+                        fname = f"{dc.get('title', 'clip')[:50].replace('/', '-')}.mp4"
+
+                        # Multipart upload to Drive
+                        import io
+                        metadata = {"name": fname, "parents": [folder_id] if folder_id else []}
+                        boundary = "clip_boundary_xyz"
+                        body = (
+                            f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
+                            + json.dumps(metadata)
+                            + f"\r\n--{boundary}\r\nContent-Type: video/mp4\r\n\r\n"
+                        ).encode() + clip_bytes + f"\r\n--{boundary}--".encode()
+
+                        upload_resp = req.post(
+                            "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+                            data=body,
+                            headers={
+                                "Authorization": f"Bearer {gdrive_access_token}",
+                                "Content-Type": f"multipart/related; boundary={boundary}",
+                            },
+                            timeout=120,
+                        )
+                        if upload_resp.ok:
+                            drive_file_id = upload_resp.json().get("id", "")
+                            # Save Drive file ID to clip record
+                            sb.table("clips").update({"gdrive_file_id": drive_file_id}).eq("id", dc["id"]).execute()
+                            uploaded_count += 1
+                            print(f"[gdrive] uploaded {fname} → Drive file {drive_file_id[:12]}")
+                        else:
+                            print(f"[gdrive] upload failed for {fname}: {upload_resp.status_code} {upload_resp.text[:200]}")
+                    except Exception as e:
+                        print(f"[gdrive] clip upload error: {e}")
+
+                if uploaded_count > 0:
+                    print(f"[gdrive] {uploaded_count}/{len(drive_clips.data or [])} clips uploaded to Google Drive")
+                    sb.table("jobs").update({"gdrive_upload_count": uploaded_count}).eq("id", job_id).execute()
+
+        except Exception as e:
+            # Drive upload is optional — don't fail the job if it errors
+            print(f"[gdrive] Drive upload skipped: {e}")
+
         update_job(sb, job_id, "done", 100, f"Done! {len(clips)} clips ready", {"clips_found": len(clips)})
         print(f"[done] job {job_id[:8]} — {len(clips)} clips")
 
@@ -597,6 +745,7 @@ def start(body: dict):
     user_id = body.get("userId")
     mode = body.get("mode", "auto")
     auth_token = body.get("authToken", "")
+    extension_clips = body.get("extensionClips", None)  # pre-defined timestamps from browser extension
 
     worker_secret = os.environ.get("WORKER_SECRET", "")
     if worker_secret and auth_token != worker_secret:
@@ -604,7 +753,7 @@ def start(body: dict):
     if not job_id or not source_url or not user_id:
         return {"error": "jobId, url, and userId required"}, 400
 
-    process_video.spawn(job_id, source_url, user_id, mode)
+    process_video.spawn(job_id, source_url, user_id, mode, extension_clips)
     return {"success": True, "jobId": job_id}
 
 

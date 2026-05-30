@@ -39,6 +39,19 @@ export default function SettingsPage() {
   const [cookiePreview, setCookiePreview] = useState('')
   const [savingCookies, setSavingCookies] = useState(false)
 
+  // Extension API key
+  const [apiKeyPreview, setApiKeyPreview] = useState<string | null>(null)
+  const [apiKeyFull, setApiKeyFull] = useState<string | null>(null)
+  const [apiKeyCreatedAt, setApiKeyCreatedAt] = useState<string | null>(null)
+  const [generatingKey, setGeneratingKey] = useState(false)
+  const [revokingKey, setRevokingKey] = useState(false)
+  const [apiKeyCopied, setApiKeyCopied] = useState(false)
+
+  // Google Drive
+  const [driveConnected, setDriveConnected] = useState(false)
+  const [driveEmail, setDriveEmail] = useState<string | null>(null)
+  const [disconnectingDrive, setDisconnectingDrive] = useState(false)
+
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToast(msg); setToastType(type)
     setTimeout(() => setToast(''), 3000)
@@ -51,12 +64,28 @@ export default function SettingsPage() {
       const { data: { user } } = await supabase.auth.getUser()
       if (user) setUser(user)
 
-      const [userRes, cookieRes] = await Promise.all([
+      const [userRes, cookieRes, apiKeyRes, driveRes] = await Promise.all([
         fetch('/api/user', { headers: { Authorization: `Bearer ${session.access_token}` } }),
         fetch('/api/user/cookies', { headers: { Authorization: `Bearer ${session.access_token}` } }),
+        fetch('/api/extension/apikey', { headers: { Authorization: `Bearer ${session.access_token}` } }),
+        fetch('/api/google-drive/status', { headers: { Authorization: `Bearer ${session.access_token}` } }),
       ])
       if (userRes.ok) { const d = await userRes.json(); setProfile(d.profile) }
       if (cookieRes.ok) { setCookieStatus(await cookieRes.json()) }
+      if (apiKeyRes.ok) {
+        const d = await apiKeyRes.json()
+        setApiKeyPreview(d.key_preview)
+        setApiKeyCreatedAt(d.created_at)
+      }
+      if (driveRes.ok) {
+        const d = await driveRes.json()
+        setDriveConnected(d.connected)
+        setDriveEmail(d.email)
+      }
+      // Check for OAuth callback result
+      const params = new URLSearchParams(window.location.search)
+      if (params.get('drive_connected')) showToast('Google Drive connected!', 'success')
+      if (params.get('drive_error')) showToast(`Drive error: ${params.get('drive_error')}`, 'error')
     })
   }, [])
 
@@ -158,6 +187,55 @@ export default function SettingsPage() {
     await fetch('/api/user/cookies', { method: 'DELETE', headers: { 'Authorization': `Bearer ${tokenRef.current}` } })
     showToast('Cookies cleared')
     setCookieStatus({ has_cookies: false, saved_at: null })
+  }
+
+  async function generateApiKey() {
+    setGeneratingKey(true)
+    const res = await fetch('/api/extension/apikey', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${tokenRef.current}` },
+    })
+    if (res.ok) {
+      const d = await res.json()
+      setApiKeyFull(d.key)
+      setApiKeyPreview(`${d.key.slice(0, 12)}${'•'.repeat(d.key.length - 12)}`)
+      setApiKeyCreatedAt(new Date().toISOString())
+      showToast('API key generated — copy it now!')
+    } else {
+      showToast('Failed to generate key', 'error')
+    }
+    setGeneratingKey(false)
+  }
+
+  async function revokeApiKey() {
+    if (!confirm('Revoke API key? Any extension using it will stop working.')) return
+    setRevokingKey(true)
+    await fetch('/api/extension/apikey', { method: 'DELETE', headers: { Authorization: `Bearer ${tokenRef.current}` } })
+    setApiKeyPreview(null); setApiKeyFull(null); setApiKeyCreatedAt(null)
+    showToast('API key revoked')
+    setRevokingKey(false)
+  }
+
+  async function copyApiKey() {
+    const key = apiKeyFull ?? apiKeyPreview
+    if (!key) return
+    await navigator.clipboard.writeText(key)
+    setApiKeyCopied(true)
+    setTimeout(() => setApiKeyCopied(false), 2000)
+  }
+
+  async function connectDrive() {
+    // Redirect to OAuth flow — pass token as query param for callback
+    window.location.href = `/api/google-drive/connect?token=${encodeURIComponent(tokenRef.current)}`
+  }
+
+  async function disconnectDrive() {
+    if (!confirm('Disconnect Google Drive?')) return
+    setDisconnectingDrive(true)
+    await fetch('/api/google-drive/status', { method: 'DELETE', headers: { Authorization: `Bearer ${tokenRef.current}` } })
+    setDriveConnected(false); setDriveEmail(null)
+    showToast('Google Drive disconnected')
+    setDisconnectingDrive(false)
   }
 
   function daysSince(d: string) { return Math.floor((Date.now() - new Date(d).getTime()) / 86400000) }
@@ -310,6 +388,81 @@ export default function SettingsPage() {
             className="w-full text-sm bg-[#FF6B00] text-white py-2.5 rounded-xl disabled:opacity-50 hover:bg-[#e55f00]">
             {savingCookies ? 'Saving...' : 'Save cookies'}
           </button>
+        </div>
+
+        {/* Extension API Key */}
+        <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
+          <h2 className="text-sm font-medium mb-1 text-white/60">Browser extension API key</h2>
+          <p className="text-xs text-white/30 mb-4 leading-relaxed">
+            Used by the ClipFinder browser extension to send clip timestamps to your account.
+            Keep this private — anyone with this key can create jobs on your behalf.
+          </p>
+
+          {apiKeyPreview && (
+            <div className="bg-black/30 rounded-xl px-4 py-3 mb-4 flex items-center justify-between gap-3">
+              <code className="text-xs font-mono text-[#FF6B00] flex-1 break-all">
+                {apiKeyFull ?? apiKeyPreview}
+              </code>
+              <div className="flex gap-2 flex-shrink-0">
+                <button onClick={copyApiKey}
+                  className="text-xs text-white/40 hover:text-white px-2 py-1 rounded bg-white/5 hover:bg-white/10">
+                  {apiKeyCopied ? '✓ Copied' : 'Copy'}
+                </button>
+                <button onClick={revokeApiKey} disabled={revokingKey}
+                  className="text-xs text-red-400/60 hover:text-red-400">
+                  Revoke
+                </button>
+              </div>
+            </div>
+          )}
+
+          {apiKeyFull && (
+            <p className="text-xs text-amber-400/70 mb-3">⚠ Copy this key now — the full key won&apos;t be shown again.</p>
+          )}
+
+          {apiKeyCreatedAt && (
+            <p className="text-xs text-white/30 mb-3">Created {daysSince(apiKeyCreatedAt)} day{daysSince(apiKeyCreatedAt) !== 1 ? 's' : ''} ago</p>
+          )}
+
+          <button onClick={generateApiKey} disabled={generatingKey}
+            className="w-full text-sm bg-[#FF6B00] text-white py-2.5 rounded-xl disabled:opacity-50 hover:bg-[#e55f00]">
+            {generatingKey ? 'Generating...' : apiKeyPreview ? 'Rotate key (generates new one)' : 'Generate API key'}
+          </button>
+        </div>
+
+        {/* Google Drive */}
+        <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
+          <h2 className="text-sm font-medium mb-1 text-white/60">Google Drive</h2>
+          <p className="text-xs text-white/30 mb-4 leading-relaxed">
+            Automatically upload your clips to a <strong className="text-white/50">ClipFinder</strong> folder in your
+            Google Drive when a job completes. Clips are also saved to your account as usual.
+          </p>
+
+          {driveConnected ? (
+            <div>
+              <div className="bg-green-500/10 border border-green-500/20 rounded-xl px-4 py-3 mb-4 flex items-center justify-between">
+                <div>
+                  <p className="text-xs text-green-400 font-medium">✓ Google Drive connected</p>
+                  {driveEmail && <p className="text-xs text-white/30 mt-0.5">{driveEmail}</p>}
+                </div>
+                <button onClick={disconnectDrive} disabled={disconnectingDrive}
+                  className="text-xs text-red-400/70 hover:text-red-400 disabled:opacity-50">
+                  {disconnectingDrive ? 'Disconnecting...' : 'Disconnect'}
+                </button>
+              </div>
+              <p className="text-xs text-white/30">Clips upload to a &quot;ClipFinder&quot; folder in your Drive after each job.</p>
+            </div>
+          ) : (
+            <button onClick={connectDrive}
+              className="w-full text-sm bg-white/10 text-white py-2.5 rounded-xl hover:bg-white/15 flex items-center justify-center gap-2">
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M6.28 4L2 12.5 6.28 21h11.44L22 12.5 17.72 4z" fillOpacity=".3"/>
+                <path d="M12 4L6.28 4 11.28 12.5H22L17.72 4z" fillOpacity=".7"/>
+                <path d="M6.28 21L11.28 12.5H2L6.28 21z"/>
+              </svg>
+              Connect Google Drive
+            </button>
+          )}
         </div>
 
         {/* Danger zone — spans full width */}
