@@ -130,9 +130,13 @@ export default function DashboardPage() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved)
-        if (Date.now() - parsed.savedAt < 12 * 60 * 60 * 1000) {
+        // Keep for 30 minutes regardless of status
+        if (Date.now() - parsed.savedAt < 30 * 60 * 1000) {
           setJob(parsed.job)
           if (parsed.url) setUrl(parsed.url)
+          // Restore clips too
+          if (parsed.clips?.length > 0) setClips(parsed.clips)
+          if (parsed.openStudio) setOpenStudio(parsed.openStudio)
         } else {
           localStorage.removeItem(`cf_active_job_${user.id}`)
         }
@@ -158,15 +162,14 @@ export default function DashboardPage() {
     return () => clearInterval(scanInterval)
   }, [user])
 
-  // Save active job to localStorage for persistence
+  // Save job + clips to localStorage — keep for 30 min including done state
   useEffect(() => {
-    if (!user) return
-    if (job && ACTIVE_STATUSES.includes(job.status)) {
-      localStorage.setItem(`cf_active_job_${user.id}`, JSON.stringify({ job, url, savedAt: Date.now() }))
-    } else if (job && (job.status === 'done' || job.status === 'error' || job.status === 'cancelled')) {
-      localStorage.removeItem(`cf_active_job_${user.id}`)
-    }
-  }, [job, user])
+    if (!user || !job) return
+    // Save everything including done jobs — user dismisses manually
+    localStorage.setItem(`cf_active_job_${user.id}`, JSON.stringify({
+      job, url, clips, openStudio, savedAt: Date.now()
+    }))
+  }, [job, clips, openStudio, user])
 
   // Job polling
   const pollJob = useCallback(async (jobId: string) => {
@@ -232,6 +235,11 @@ export default function DashboardPage() {
     if (!url.trim()) return
     setVodDuration(null)
     await startJob(url)
+  }
+
+  function dismissJob() {
+    setJob(null); setClips([]); setOpenStudio(null); setUrl('')
+    if (user) localStorage.removeItem(`cf_active_job_${user.id}`)
   }
 
   async function cancelJob() {
@@ -422,7 +430,13 @@ export default function DashboardPage() {
         {/* Clips */}
         {clips.length > 0 && (
           <div>
-            <h2 className="font-semibold mb-4 text-white/80">{clips.length} clips found</h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-semibold text-white/80">{clips.length} clips found</h2>
+              <button onClick={dismissJob}
+                className="text-xs text-white/40 hover:text-white/70 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/5 transition-colors">
+                ✓ Done — clear results
+              </button>
+            </div>
             <div className="space-y-4">
               {clips.map(clip => {
                 const studio = studios[clip.id] ?? { platform: 'twitter', tone: 'drama', options: [], hook: '', generating: false, copied: null }
@@ -430,59 +444,56 @@ export default function DashboardPage() {
 
                 return (
                   <div key={clip.id} className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden">
-                    {/* Split layout: left = video, right = info + buttons */}
+
+                    {/* TOP: video left + info right */}
                     <div className="flex flex-col lg:flex-row">
 
-                      {/* LEFT — video always visible */}
-                      <div className="lg:w-[320px] lg:flex-shrink-0 bg-black lg:rounded-l-2xl flex items-center justify-center" style={{ minHeight: '180px' }}>
+                      {/* LEFT — big video */}
+                      <div className="lg:w-[45%] bg-black flex items-center justify-center" style={{ minHeight: '220px' }}>
                         {clip.file_url ? (
-                          <video
-                            src={clip.file_url}
-                            controls
-                            className="w-full h-full object-contain"
-                            style={{ maxHeight: '240px' }}
+                          <video src={clip.file_url} controls className="w-full h-full object-contain" style={{ maxHeight: '280px' }}
                             onError={async () => {
                               if (clip.storage_path) {
-                                const { data: signed } = await supabase.storage.from('clips').createSignedUrl(clip.storage_path, 3600)
-                                if (signed?.signedUrl) setClips(prev => prev.map(c => c.id === clip.id ? { ...c, file_url: signed.signedUrl } : c))
+                                const { data: s } = await supabase.storage.from('clips').createSignedUrl(clip.storage_path, 3600)
+                                if (s?.signedUrl) setClips(prev => prev.map(c => c.id === clip.id ? { ...c, file_url: s.signedUrl } : c))
                               }
-                            }}
-                          />
+                            }} />
                         ) : clip.storage_path ? (
                           <ClipVideoLoader storagePath={clip.storage_path} supabase={supabase}
                             onUrl={(url) => setClips(prev => prev.map(c => c.id === clip.id ? { ...c, file_url: url } : c))} />
                         ) : (
-                          <div className="text-center text-white/20 p-4">
-                            <p className="text-2xl mb-1">🎬</p>
-                            <p className="text-xs">Processing...</p>
+                          <div className="text-center text-white/20 p-6">
+                            <p className="text-3xl mb-2">🎬</p>
+                            <p className="text-sm">Processing...</p>
                           </div>
                         )}
                       </div>
 
-                      {/* RIGHT — info + buttons */}
-                      <div className="flex-1 p-4">
-                        <div className="flex items-start justify-between gap-3 mb-2">
-                          <Link href={`/clips/${clip.id}`} className="font-medium text-sm leading-snug hover:text-[#FF6B00] transition-colors">
-                            {clip.title ?? 'Untitled clip'}
-                          </Link>
-                          <span className="text-xs bg-[#FF6B00]/20 text-[#FF6B00] px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0">Score {clip.score ?? '?'}/10</span>
-                        </div>
-                        <p className="text-white/50 text-xs mb-2 leading-relaxed">{clip.summary}</p>
-                        <div className="flex items-center gap-3 text-xs text-white/40 mb-3">
-                          {clip.start_ts && <span>⏱ {clip.start_ts} → {clip.end_ts}</span>}
-                          <span>📏 {Math.round(clip.duration_sec ?? 0)}s</span>
-                          {clip.speaker && <span>🎤 {clip.speaker}</span>}
+                      {/* RIGHT — info */}
+                      <div className="flex-1 p-5 flex flex-col justify-between">
+                        <div>
+                          <div className="flex items-start justify-between gap-3 mb-2">
+                            <Link href={`/clips/${clip.id}`} className="font-semibold text-base leading-snug hover:text-[#FF6B00] transition-colors">
+                              {clip.title ?? 'Untitled clip'}
+                            </Link>
+                            <span className="text-xs bg-[#FF6B00]/20 text-[#FF6B00] px-2 py-1 rounded-full whitespace-nowrap flex-shrink-0 font-medium">Score {clip.score ?? '?'}/10</span>
+                          </div>
+                          <p className="text-white/50 text-sm mb-3 leading-relaxed">{clip.summary}</p>
+                          <div className="flex items-center gap-3 text-xs text-white/40 mb-4">
+                            {clip.start_ts && <span>⏱ {clip.start_ts} → {clip.end_ts}</span>}
+                            <span>📏 {Math.round(clip.duration_sec ?? 0)}s</span>
+                            {clip.speaker && <span>🎤 {clip.speaker}</span>}
+                          </div>
                         </div>
                         <div className="flex gap-2 flex-wrap">
-                          <Link href={`/clips/${clip.id}`} className="text-xs bg-white/10 text-white/60 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors">
+                          <Link href={`/clips/${clip.id}`} className="text-xs bg-white/10 text-white/60 hover:bg-white/20 px-3 py-2 rounded-lg transition-colors">
                             🎬 Open clip
                           </Link>
                           {clip.file_url && (
-                            <a href={clip.file_url} className="text-xs bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors" download>⬇️ Download</a>
+                            <a href={clip.file_url} className="text-xs bg-white/10 hover:bg-white/20 px-3 py-2 rounded-lg transition-colors text-white/60" download>⬇️ Download</a>
                           )}
-                          <button
-                            onClick={() => setOpenStudio(isOpen ? null : clip.id)}
-                            className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${isOpen ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}>
+                          <button onClick={() => setOpenStudio(isOpen ? null : clip.id)}
+                            className={`text-xs px-3 py-2 rounded-lg transition-colors font-medium ${isOpen ? 'bg-[#FF6B00] text-white' : 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30 hover:bg-[#FF6B00]/30'}`}>
                             ✨ Post Bridge {isOpen ? '▲' : '▼'}
                           </button>
                         </div>

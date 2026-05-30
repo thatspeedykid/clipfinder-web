@@ -365,7 +365,7 @@ def _upload_clip_to_storage(sb, clip_path, user_id, job_id, clip_num, clip_id, s
         return False
 
 
-def _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, seg_start_offset=0):
+def _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, seg_start_offset=0, streamer_name=""):
     """Cut clips at given timestamps from HLS URL and upload."""
     # Insert clip rows
     clip_rows = []
@@ -374,8 +374,8 @@ def _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, s
         end = ec.get("end", "00:01:00")
         clip_rows.append({
             "job_id": job_id, "user_id": user_id,
-            "title": ec.get("label") or f"Extension clip {start}–{end}",
-            "summary": "Clipped via browser extension",
+            "title": ec.get("label") or f"{streamer_name.capitalize() if streamer_name else 'Extension'} clip {i+1}",
+            "summary": f"Clipped via browser extension{(' from ' + streamer_name) if streamer_name else ''}",
             "start_ts": start, "end_ts": end,
             "duration_sec": int(ts_to_seconds(end) - ts_to_seconds(start)), "score": 80,
         })
@@ -486,40 +486,40 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
 
             # Check if full clip feature is enabled (disabled by default to save storage)
             save_full_clip = get_flag(sb, "feature_extension_full_clip", False)
+            print(f"[extension] save_full_clip flag: {save_full_clip}")
 
             if save_full_clip:
-              # First: upload the FULL uncut segment as clip 0 (extension only)
-              # HLS URL already points to the right position — just cap to segment duration
-              update_job(sb, job_id, "downloading", 10, "Saving full clip...")
-            full_clip_path = tmp / "full_clip.mp4"
-            seg_duration_capped = min(seg_duration, 240)  # cap full clip at 4min
-            print(f"[extension] cutting full clip: {seg_duration_capped}s from HLS stream")
-            full_cut = subprocess.run([
-                "ffmpeg",
-                "-i", source_url,           # NO -ss before -i for HLS live streams
-                "-t", str(seg_duration_capped),
-                "-c", "copy", "-movflags", "+faststart",
-                str(full_clip_path), "-y", "-loglevel", "error"
-            ], capture_output=True, text=True, timeout=120)
+                # Upload the FULL uncut segment as clip 0
+                update_job(sb, job_id, "downloading", 10, "Saving full clip...")
+                full_clip_path = tmp / "full_clip.mp4"
+                seg_duration_capped = min(seg_duration, 240)
+                print(f"[extension] cutting full clip: {seg_duration_capped}s from HLS stream")
+                full_cut = subprocess.run([
+                    "ffmpeg", "-i", source_url,
+                    "-t", str(seg_duration_capped),
+                    "-vf", "scale=-2:720",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                    "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart",
+                    str(full_clip_path), "-y", "-loglevel", "error"
+                ], capture_output=True, text=True, timeout=180)
 
-            full_clip_id = None
-            if full_cut.returncode == 0 and full_clip_path.exists():
-                prefix = streamer_name.capitalize() if streamer_name else "Extension"
-                full_row = [{
-                    "job_id": job_id, "user_id": user_id,
-                    "title": f"{prefix} — Full clip",
-                    "summary": f"Full uncut segment clipped via extension{' from ' + streamer_name if streamer_name else ''}",
-                    "start_ts": ec0.get("start", "00:00:00"),
-                    "end_ts": ec0.get("end", "00:04:00"),
-                    "duration_sec": int(seg_duration_capped), "score": 85,
-                }]
-                sb.table("clips").insert(full_row).execute()
-                full_db = sb.table("clips").select("id").eq("job_id", job_id).order("created_at").limit(1).execute()
-                if full_db.data:
-                    full_clip_id = full_db.data[0]["id"]
-                    _upload_clip_to_storage(sb, full_clip_path, user_id, job_id, 0, full_clip_id, ec0.get("start", "00:00:00"))
-                    print(f"[extension] full clip uploaded")
-            # end save_full_clip
+                if full_cut.returncode == 0 and full_clip_path.exists():
+                    prefix = streamer_name.capitalize() if streamer_name else "Extension"
+                    full_row = [{
+                        "job_id": job_id, "user_id": user_id,
+                        "title": f"{prefix} — Full clip",
+                        "summary": f"Full uncut segment from extension{' — ' + streamer_name if streamer_name else ''}",
+                        "start_ts": ec0.get("start", "00:00:00"),
+                        "end_ts": ec0.get("end", "00:04:00"),
+                        "duration_sec": int(seg_duration_capped), "score": 85,
+                    }]
+                    sb.table("clips").insert(full_row).execute()
+                    full_db = sb.table("clips").select("id").eq("job_id", job_id).order("created_at").limit(1).execute()
+                    if full_db.data:
+                        _upload_clip_to_storage(sb, full_clip_path, user_id, job_id, 0, full_db.data[0]["id"], ec0.get("start", "00:00:00"))
+                        print(f"[extension] full clip uploaded")
+            else:
+                print(f"[extension] full clip disabled — skipping")
 
             # Download just the segment audio from HLS
             update_job(sb, job_id, "downloading", 15, "Downloading stream segment...")
@@ -538,7 +538,7 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
             if result.returncode != 0 or not seg_audio.exists():
                 # Fallback: cut at timestamps directly without AI
                 print(f"[extension] audio download failed, cutting directly at timestamps")
-                _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, seg_start)
+                _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, seg_start, streamer_name)
                 return
 
             print(f"[extension] segment audio: {seg_audio.stat().st_size/1024/1024:.1f}MB")
@@ -554,7 +554,7 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
 
             if not transcript_text:
                 print("[extension] no transcript, cutting at timestamps")
-                _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, seg_start)
+                _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, seg_start, streamer_name)
                 return
 
             # AI analysis
@@ -572,12 +572,14 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
                     timeout=120,
                 )
                 if not analyze_resp.ok:
-                    raise Exception(f"analyze {analyze_resp.status_code}")
+                    err_body = analyze_resp.text[:300]
+                    print(f"[analyze] error body: {err_body}")
+                    raise Exception(f"analyze {analyze_resp.status_code}: {err_body}")
                 clips_data = analyze_resp.json().get("clips", [])
                 clip_id_map = {c.get("start_ts", ""): c.get("id", "") for c in clips_data}
             except Exception as e:
                 print(f"[extension] AI failed: {e}, cutting at timestamps")
-                _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, seg_start)
+                _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, seg_start, streamer_name)
                 return
 
             # Cut AI-identified clips from HLS
