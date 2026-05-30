@@ -473,6 +473,21 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
 
         update_job(sb, job_id, "cutting", 70, f"Cutting {len(clips)} clips...")
 
+        # Build a lookup: start_ts -> supabase clip id
+        # The analyze API now returns clips with real UUIDs
+        clip_id_map = {}
+        for c in clips:
+            real_id = c.get("id", "")
+            start = c.get("start_ts", "")
+            if real_id and start:
+                clip_id_map[start] = real_id
+
+        # Fallback: fetch from DB by job_id if map is empty
+        if not clip_id_map:
+            db_clips = sb.table("clips").select("id, start_ts").eq("job_id", job_id).execute()
+            for row in (db_clips.data or []):
+                clip_id_map[row["start_ts"]] = row["id"]
+
         # ── Step 5: Cut clips ──────────────────────────────────────────────────
         for i, clip in enumerate(clips):
             start_ts = clip.get("start_ts", "00:00:00")
@@ -541,8 +556,15 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
                 signed = sb.storage.from_("clips").create_signed_url(storage_path, sign_seconds)
                 file_url = signed.get("signedURL", "")
 
-                # Update clip record
-                clip_id = clip.get("id", "")
+                # Update clip record — use the real Supabase UUID from our map
+                clip_id = clip_id_map.get(start_ts, "")
+                if not clip_id:
+                    # Last resort: fetch by job_id + start_ts
+                    try:
+                        row = sb.table("clips").select("id").eq("job_id", job_id).eq("start_ts", start_ts).single().execute()
+                        clip_id = (row.data or {}).get("id", "")
+                    except Exception:
+                        pass
                 if clip_id:
                     sb.table("clips").update({
                         "file_url": file_url,
@@ -550,6 +572,9 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
                         "file_size_mb": round(clip_size_mb, 2),
                         "storage_path": storage_path,
                     }).eq("id", clip_id).execute()
+                    print(f"[storage] updated clip record {clip_id[:8]}")
+                else:
+                    print(f"[storage] WARNING: could not find clip record for start_ts={start_ts}")
 
                 print(f"[storage] uploaded clip {i+1} — expires {expires.strftime('%Y-%m-%d %H:%M')} UTC")
                 clip_path.unlink(missing_ok=True)

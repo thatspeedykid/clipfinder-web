@@ -196,6 +196,13 @@ export async function POST(req: NextRequest) {
     const { error: insertError } = await supabase.from('clips').insert(clipRows)
     if (insertError) throw insertError
 
+    // Fetch back with real Supabase UUIDs so the worker can update file_url after cutting
+    const { data: insertedClips } = await supabase
+      .from('clips')
+      .select('id, start_ts, end_ts, title')
+      .eq('job_id', jobId)
+      .order('start_ts', { ascending: true })
+
     await supabase.from('jobs').update({
       status: 'cutting', progress: 70,
       progress_msg: `Found ${clips.length} clips via ${provider} — cutting...`,
@@ -203,7 +210,7 @@ export async function POST(req: NextRequest) {
     }).eq('id', jobId)
 
     if (!isServiceCall) await incrementQuota(userId)
-    return NextResponse.json({ success: true, clips: clipRows, count: clips.length, provider })
+    return NextResponse.json({ success: true, clips: insertedClips ?? clipRows, count: clips.length, provider })
 
   } catch (err) {
     console.error('[analyze] error:', err)
