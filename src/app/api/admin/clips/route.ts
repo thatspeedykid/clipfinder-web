@@ -13,22 +13,14 @@ export async function GET(req: NextRequest) {
 
   let query = supabase
     .from('clips')
-    .select(`
-      id, title, file_url, file_size_mb, file_expires_at,
-      storage_path, created_at, user_id,
-      profiles ( email, tier ),
-      jobs ( video_title, source_url )
-    `)
+    .select(`id, title, file_url, file_size_mb, file_expires_at, storage_path, created_at, user_id, profiles ( email, tier ), jobs ( video_title, source_url )`)
     .order('created_at', { ascending: false })
-    .limit(100)
+    .limit(200)
 
-  if (expired) {
-    query = query.lt('file_expires_at', new Date().toISOString())
-  }
+  if (expired) query = query.lt('file_expires_at', new Date().toISOString())
 
   const { data, error: dbError } = await query
   if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 })
-
   return NextResponse.json({ clips: data ?? [] })
 }
 
@@ -41,37 +33,46 @@ export async function DELETE(req: NextRequest) {
   const { clipId, storagePath, deleteAll, force } = body
 
   if (deleteAll) {
+    // Get all clips (or just expired)
     let query = supabase.from('clips').select('id, storage_path')
     if (!force) {
       query = query.lt('file_expires_at', new Date().toISOString())
     }
-    const { data: toDelete } = await query.not('storage_path', 'is', null)
+    const { data: toDelete, error: fetchErr } = await query
+    if (fetchErr) return NextResponse.json({ error: fetchErr.message }, { status: 500 })
+
     let deleted = 0
-    for (const clip of toDelete ?? []) {
-      if (clip.storage_path) {
-        await supabase.storage.from('clips').remove([clip.storage_path])
-      }
-      await supabase.from('clips').update({ file_url: null, storage_path: null }).eq('id', clip.id)
+    const clips = toDelete ?? []
+
+    // Delete from storage bucket
+    const withStorage = clips.filter(c => c.storage_path).map(c => c.storage_path as string)
+    if (withStorage.length > 0) {
+      await supabase.storage.from('clips').remove(withStorage)
+    }
+
+    // Clear file fields on ALL matched clips
+    for (const clip of clips) {
+      await supabase.from('clips')
+        .update({ file_url: null, storage_path: null, file_expires_at: null })
+        .eq('id', clip.id)
       deleted++
     }
-    // Also count clips without storage_path if force
-    if (force) {
-      const { data: noStorage } = await supabase.from('clips').select('id').is('storage_path', null)
-      deleted += (noStorage ?? []).length
-    }
+
     return NextResponse.json({ success: true, deleted })
   }
 
+  // Single clip delete
   if (!clipId) return NextResponse.json({ error: 'clipId required' }, { status: 400 })
 
   if (storagePath) {
     await supabase.storage.from('clips').remove([storagePath])
   }
 
-  await supabase
+  const { error: updateErr } = await supabase
     .from('clips')
     .update({ file_url: null, storage_path: null, file_expires_at: null })
     .eq('id', clipId)
 
+  if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 })
   return NextResponse.json({ success: true })
 }

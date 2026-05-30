@@ -240,7 +240,7 @@ export default function AdminPage() {
     <main className="min-h-screen bg-[#0a0a0a] text-white">
       {/* Toast */}
       {toastMsg && (
-        <div className="fixed top-4 right-4 z-50 bg-[#FF6B00] text-white text-sm px-4 py-2 rounded-xl shadow-lg">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[#FF6B00] text-white text-sm px-4 py-2 rounded-xl shadow-lg">
           {toastMsg}
         </div>
       )}
