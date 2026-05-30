@@ -30,6 +30,11 @@ image = (
 
 secrets = [modal.Secret.from_name("clipfinder-secrets")]
 
+# Clip duration limits
+CLIP_MIN_SEC = 30    # Minimum clip duration (skip clips shorter than this)
+CLIP_MAX_SEC = 180   # Maximum clip duration (3 minutes)
+
+
 
 def update_job(sb, job_id, status, progress, msg, extra={}):
     sb.table("jobs").update({"status": status, "progress": progress, "progress_msg": msg, **extra}).eq("id", job_id).execute()
@@ -158,7 +163,7 @@ def download_audio(url, tmp, source, cookies_file=None):
             cmd = [
                 "yt-dlp", clip_url,
                 "-o", str(audio_raw),
-                "-x", "--audio-format", "mp3", "--audio-quality", "64K",
+                "-x", "--audio-format", "mp3", "--audio-quality", "32K",  # lower quality = faster download for transcription
                 "--quiet", "--no-warnings",
             ]
             result = run_yt_dlp(cmd)
@@ -169,7 +174,7 @@ def download_audio(url, tmp, source, cookies_file=None):
     cmd = [
         "yt-dlp", url,
         "-o", str(audio_raw),
-        "-x", "--audio-format", "mp3", "--audio-quality", "64K",
+        "-x", "--audio-format", "mp3", "--audio-quality", "32K",  # lower quality = faster download for transcription
         "--no-playlist", "--quiet", "--no-warnings",
     ]
 
@@ -296,8 +301,7 @@ def cut_clip_section(url, start_ts, end_ts, output_path, cookies_file=None, sour
             "-ss", str(start_sec),      # seek BEFORE input = fast
             "-i", direct_url,
             "-t", str(duration),
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "128k",
+            "-c", "copy",  # stream copy for HLS/direct CDN URLs
             "-movflags", "+faststart",
             str(output_path), "-y", "-loglevel", "error"
         ], capture_output=True, text=True, timeout=180)
@@ -387,12 +391,12 @@ def _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, s
         duration = ts_to_seconds(end_ts) - ts_to_seconds(start_ts)
         # Enforce duration limits
         duration = max(CLIP_MIN_SEC, min(CLIP_MAX_SEC, duration))
+        # For HLS streams: URL is already at right position, use start_sec as offset within segment
         result = subprocess.run([
-            "ffmpeg", "-ss", str(start_sec), "-i", source_url,
-            "-t", str(duration), "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+            "ffmpeg", "-ss", str(ts_to_seconds(start_ts)), "-i", source_url,
+            "-t", str(duration), "-c", "copy", "-movflags", "+faststart",
             str(clip_path), "-y", "-loglevel", "error"
-        ], capture_output=True, text=True, timeout=300)
+        ], capture_output=True, text=True, timeout=120)
         if result.returncode == 0 and clip_path.exists():
             clip_id = clip_id_map.get(start_ts, "")
             _upload_clip_to_storage(sb, clip_path, user_id, job_id, i+1, clip_id, start_ts)
@@ -402,28 +406,32 @@ def _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, s
 
 
 def _upload_clips_from_hls(sb, tmp, source_url, clips_data, clip_id_map, job_id, user_id, seg_start_offset=0):
-    """Cut and upload AI-identified clips from HLS URL."""
-    for i, clip in enumerate(clips_data):
+    """Cut and upload AI-identified clips from HLS URL.
+    Timestamps from transcript are relative to the segment audio we downloaded.
+    The HLS URL is already at stream position so -ss is relative to stream start."""
+    def cut_and_upload(args):
+        i, clip = args
         start_ts = clip.get("start_ts", "00:00:00")
         end_ts = clip.get("end_ts", "00:01:00")
-        clip_path = tmp / f"clip_{i+1}.mp4"
-        # Offset by segment start since transcript timestamps are relative to segment
-        start_sec = ts_to_seconds(start_ts) + seg_start_offset
-        duration = ts_to_seconds(end_ts) - ts_to_seconds(start_ts)
-        print(f"[extension] cutting clip {i+1}: {start_ts}+{seg_start_offset}s offset")
-        # Enforce duration limits
-        duration = max(CLIP_MIN_SEC, min(CLIP_MAX_SEC, duration))
+        clip_path = tmp / f"sub_clip_{i+1}.mp4"
+        start_sec = ts_to_seconds(start_ts)
+        duration = max(CLIP_MIN_SEC, min(CLIP_MAX_SEC, ts_to_seconds(end_ts) - start_sec))
+        print(f"[extension] sub-clip {i+1}: {start_ts} → {end_ts} ({duration:.0f}s)")
         result = subprocess.run([
             "ffmpeg", "-ss", str(start_sec), "-i", source_url,
-            "-t", str(duration), "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+            "-t", str(duration), "-c", "copy", "-movflags", "+faststart",
             str(clip_path), "-y", "-loglevel", "error"
-        ], capture_output=True, text=True, timeout=300)
+        ], capture_output=True, text=True, timeout=120)
         if result.returncode == 0 and clip_path.exists():
             clip_id = clip_id_map.get(start_ts, "")
-            _upload_clip_to_storage(sb, clip_path, user_id, job_id, i+1, clip_id, start_ts)
+            _upload_clip_to_storage(sb, clip_path, user_id, job_id, i+2, clip_id, start_ts)
         else:
-            print(f"[extension] ffmpeg failed clip {i+1}: {result.stderr[-100:]}")
+            print(f"[extension] sub-clip {i+1} failed: {result.stderr[-100:]}")
+
+    # Cut and upload sub-clips in parallel
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        list(executor.map(cut_and_upload, enumerate(clips_data)))
 
     done_count = len(clips_data)
     update_job(sb, job_id, "done", 100, f"Done! {done_count} clips ready", {"clips_found": done_count})
@@ -476,16 +484,23 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
             video_title = streamer_name or "Extension clip"
             sb.table("jobs").update({"video_title": video_title}).eq("id", job_id).execute()
 
-            # First: upload the FULL uncut segment as clip 0 (extension only)
-            update_job(sb, job_id, "downloading", 10, "Saving full clip...")
+            # Check if full clip feature is enabled (disabled by default to save storage)
+            save_full_clip = get_flag(sb, "feature_extension_full_clip", False)
+
+            if save_full_clip:
+              # First: upload the FULL uncut segment as clip 0 (extension only)
+              # HLS URL already points to the right position — just cap to segment duration
+              update_job(sb, job_id, "downloading", 10, "Saving full clip...")
             full_clip_path = tmp / "full_clip.mp4"
             seg_duration_capped = min(seg_duration, 240)  # cap full clip at 4min
+            print(f"[extension] cutting full clip: {seg_duration_capped}s from HLS stream")
             full_cut = subprocess.run([
-                "ffmpeg", "-ss", str(seg_start), "-i", source_url,
-                "-t", str(seg_duration_capped), "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+                "ffmpeg",
+                "-i", source_url,           # NO -ss before -i for HLS live streams
+                "-t", str(seg_duration_capped),
+                "-c", "copy", "-movflags", "+faststart",
                 str(full_clip_path), "-y", "-loglevel", "error"
-            ], capture_output=True, text=True, timeout=300)
+            ], capture_output=True, text=True, timeout=120)
 
             full_clip_id = None
             if full_cut.returncode == 0 and full_clip_path.exists():
@@ -504,14 +519,19 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
                     full_clip_id = full_db.data[0]["id"]
                     _upload_clip_to_storage(sb, full_clip_path, user_id, job_id, 0, full_clip_id, ec0.get("start", "00:00:00"))
                     print(f"[extension] full clip uploaded")
+            # end save_full_clip
 
             # Download just the segment audio from HLS
             update_job(sb, job_id, "downloading", 15, "Downloading stream segment...")
             seg_audio = tmp / "seg_audio.mp3"
+            # HLS URL already at right position — no -ss needed, just limit duration
+            audio_duration = min(seg_duration, 240)
             result = subprocess.run([
-                "ffmpeg", "-ss", str(seg_start), "-i", source_url,
-                "-t", str(seg_duration), "-vn",
+                "ffmpeg",
+                "-i", source_url,
+                "-t", str(audio_duration), "-vn",
                 "-ar", "16000", "-ac", "1", "-b:a", "32k",
+                "-threads", "0",
                 str(seg_audio), "-y", "-loglevel", "error"
             ], capture_output=True, text=True, timeout=300)
 

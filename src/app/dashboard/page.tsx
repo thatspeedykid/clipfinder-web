@@ -182,7 +182,13 @@ export default function DashboardPage() {
         setTimeout(async () => {
           const res2 = await fetch(`/api/jobs/${jobId}`, { headers: { Authorization: `Bearer ${tokenRef.current}` } })
           const data2 = await res2.json()
-          if (data2.clips) setClips(data2.clips)
+          if (data2.clips) {
+          setClips(data2.clips)
+          // Auto-open Post Bridge on the first (highest score) clip
+          if (data2.clips.length > 0 && !openStudio) {
+            setOpenStudio(data2.clips[0].id)
+          }
+        }
         }, 3000)
       }
     }
@@ -421,72 +427,67 @@ export default function DashboardPage() {
               {clips.map(clip => {
                 const studio = studios[clip.id] ?? { platform: 'twitter', tone: 'drama', options: [], hook: '', generating: false, copied: null }
                 const isOpen = openStudio === clip.id
-                const isPreviewOpen = openPreview === clip.id
-                const hasVideo = !!clip.file_url || !!clip.storage_path
 
                 return (
                   <div key={clip.id} className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden">
-                    <div className="p-5">
-                      <div className="flex items-start justify-between gap-4 mb-2">
-                        <Link href={`/clips/${clip.id}`} className="font-medium text-sm leading-snug hover:text-[#FF6B00] transition-colors">
-                          {clip.title ?? 'Untitled clip'}
-                        </Link>
-                        <span className="text-xs bg-[#FF6B00]/20 text-[#FF6B00] px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0">Score {clip.score ?? '?'}/10</span>
-                      </div>
-                      <p className="text-white/50 text-xs mb-3">{clip.summary}</p>
-                      <div className="flex items-center gap-4 text-xs text-white/40 mb-3">
-                        <span>⏱ {clip.start_ts} → {clip.end_ts}</span>
-                        <span>📏 {Math.round(clip.duration_sec ?? 0)}s</span>
-                        {clip.speaker && <span>🎤 {clip.speaker}</span>}
-                      </div>
-                      <div className="flex gap-2 flex-wrap">
-                        {hasVideo ? (
-                          <>
-                            <button
-                              onClick={() => setOpenPreview(isPreviewOpen ? null : clip.id)}
-                              className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${isPreviewOpen ? 'bg-white/20 text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}>
-                              {isPreviewOpen ? '▼ Hide' : '▶ Preview'}
-                            </button>
-                            {clip.file_url && (
-                              <a href={clip.file_url} className="text-xs bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors" download>⬇️ Download</a>
-                            )}
-                          </>
-                        ) : (
-                          <Link href={`/clips/${clip.id}`} className="text-xs bg-white/5 text-white/30 px-3 py-1.5 rounded-lg border border-white/10 hover:bg-white/10">
-                            🎬 Open clip
-                          </Link>
-                        )}
-                        <button
-                          onClick={() => setOpenStudio(isOpen ? null : clip.id)}
-                          className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${isOpen ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}>
-                          ✨ Post Bridge {isOpen ? '▲' : '▼'}
-                        </button>
-                      </div>
-                    </div>
+                    {/* Split layout: left = video, right = info + buttons */}
+                    <div className="flex flex-col lg:flex-row">
 
-                    {/* Video preview */}
-                    {isPreviewOpen && (
-                      <div className="border-t border-white/10 bg-black p-4">
+                      {/* LEFT — video always visible */}
+                      <div className="lg:w-[320px] lg:flex-shrink-0 bg-black lg:rounded-l-2xl flex items-center justify-center" style={{ minHeight: '180px' }}>
                         {clip.file_url ? (
                           <video
                             src={clip.file_url}
                             controls
-                            className="w-full rounded-xl"
-                            style={{ maxHeight: '320px' }}
+                            className="w-full h-full object-contain"
+                            style={{ maxHeight: '240px' }}
                             onError={async () => {
-                              // Signed URL expired — refresh via clip detail page
-                              console.log('[preview] video load error, URL may have expired')
+                              if (clip.storage_path) {
+                                const { data: signed } = await supabase.storage.from('clips').createSignedUrl(clip.storage_path, 3600)
+                                if (signed?.signedUrl) setClips(prev => prev.map(c => c.id === clip.id ? { ...c, file_url: signed.signedUrl } : c))
+                              }
                             }}
                           />
+                        ) : clip.storage_path ? (
+                          <ClipVideoLoader storagePath={clip.storage_path} supabase={supabase}
+                            onUrl={(url) => setClips(prev => prev.map(c => c.id === clip.id ? { ...c, file_url: url } : c))} />
                         ) : (
-                          <div className="flex flex-col items-center justify-center py-8 text-white/30">
-                            <p className="text-3xl mb-2">🎬</p>
-                            <p className="text-sm">Video is being processed...</p>
-                            <Link href={`/clips/${clip.id}`} className="mt-3 text-xs text-[#FF6B00] hover:underline">Open clip page →</Link>
+                          <div className="text-center text-white/20 p-4">
+                            <p className="text-2xl mb-1">🎬</p>
+                            <p className="text-xs">Processing...</p>
                           </div>
                         )}
                       </div>
-                    )}
+
+                      {/* RIGHT — info + buttons */}
+                      <div className="flex-1 p-4">
+                        <div className="flex items-start justify-between gap-3 mb-2">
+                          <Link href={`/clips/${clip.id}`} className="font-medium text-sm leading-snug hover:text-[#FF6B00] transition-colors">
+                            {clip.title ?? 'Untitled clip'}
+                          </Link>
+                          <span className="text-xs bg-[#FF6B00]/20 text-[#FF6B00] px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0">Score {clip.score ?? '?'}/10</span>
+                        </div>
+                        <p className="text-white/50 text-xs mb-2 leading-relaxed">{clip.summary}</p>
+                        <div className="flex items-center gap-3 text-xs text-white/40 mb-3">
+                          {clip.start_ts && <span>⏱ {clip.start_ts} → {clip.end_ts}</span>}
+                          <span>📏 {Math.round(clip.duration_sec ?? 0)}s</span>
+                          {clip.speaker && <span>🎤 {clip.speaker}</span>}
+                        </div>
+                        <div className="flex gap-2 flex-wrap">
+                          <Link href={`/clips/${clip.id}`} className="text-xs bg-white/10 text-white/60 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors">
+                            🎬 Open clip
+                          </Link>
+                          {clip.file_url && (
+                            <a href={clip.file_url} className="text-xs bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors" download>⬇️ Download</a>
+                          )}
+                          <button
+                            onClick={() => setOpenStudio(isOpen ? null : clip.id)}
+                            className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${isOpen ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}>
+                            ✨ Post Bridge {isOpen ? '▲' : '▼'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
 
                     {/* Post Bridge */}
                     {isOpen && (
