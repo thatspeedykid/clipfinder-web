@@ -107,6 +107,15 @@ export default function DashboardPage() {
       const data = await res.json()
       if (data.job) setJob(data.job)
       if (data.clips) setClips(data.clips)
+      if (data.job?.status === 'done' || data.job?.status === 'error') {
+        clearInterval(pollRef.current!)
+        // One extra fetch 3s later to get fresh signed URLs after storage upload
+        setTimeout(async () => {
+          const res2 = await fetch(`/api/jobs/${job.id}`, { headers: { Authorization: `Bearer ${tokenRef.current}` } })
+          const data2 = await res2.json()
+          if (data2.clips) setClips(data2.clips)
+        }, 3000)
+      }
     }, 2000)
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [job])
