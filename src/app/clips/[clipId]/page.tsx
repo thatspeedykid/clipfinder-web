@@ -216,26 +216,46 @@ export default function ClipDetailPage() {
         <div className="flex-1 px-6 py-6 flex flex-col">
           <p className="text-xs font-medium text-white/60 mb-4 uppercase tracking-wide">Preview</p>
 
-          {clip.file_url && !expired ? (
+          {expired ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-white/20">
+              <p className="text-4xl mb-3">⏰</p>
+              <p className="text-sm">This clip has expired</p>
+              <p className="text-xs mt-1">Free clips expire after 12 hours. Upgrade for 15-day storage.</p>
+              <Link href="/pricing" className="mt-4 text-xs bg-[#FF6B00] text-white px-4 py-2 rounded-lg hover:bg-[#e55f00]">
+                Upgrade
+              </Link>
+            </div>
+          ) : clip.file_url ? (
             <div className="flex-1 flex flex-col">
               <div className="bg-black rounded-2xl overflow-hidden flex-1 flex items-center justify-center" style={{ minHeight: '320px' }}>
                 <video
+                  key={clip.file_url}
                   src={clip.file_url}
                   controls
                   autoPlay={false}
+                  playsInline
                   className="w-full h-full"
                   style={{ maxHeight: '60vh', objectFit: 'contain' }}
+                  onError={async (e) => {
+                    // URL expired mid-session — try to refresh via supabase
+                    if (clip.storage_path) {
+                      try {
+                        const { data: signed } = await supabase.storage
+                          .from('clips')
+                          .createSignedUrl(clip.storage_path, 3600)
+                        if (signed?.signedUrl) {
+                          setClip(prev => prev ? { ...prev, file_url: signed.signedUrl } : null)
+                        }
+                      } catch {}
+                    }
+                  }}
                 />
               </div>
-
-              {/* Download + expiry */}
               <div className="mt-4 flex items-center justify-between gap-4">
                 <div>
                   <p className="text-sm font-medium truncate">{clip.title}</p>
                   {clip.file_expires_at && !expired && (
-                    <p className="text-xs text-white/40 mt-0.5">
-                      Expires in {daysLeft(clip.file_expires_at)}
-                    </p>
+                    <p className="text-xs text-white/40 mt-0.5">Expires in {daysLeft(clip.file_expires_at)}</p>
                   )}
                 </div>
                 <a
@@ -247,20 +267,17 @@ export default function ClipDetailPage() {
                 </a>
               </div>
             </div>
-          ) : expired ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-white/20">
-              <p className="text-4xl mb-3">⏰</p>
-              <p className="text-sm">This clip has expired</p>
-              <p className="text-xs mt-1">Free clips expire after 12 hours. Upgrade for 15-day storage.</p>
-              <Link href="/pricing" className="mt-4 text-xs bg-[#FF6B00] text-white px-4 py-2 rounded-lg hover:bg-[#e55f00]">
-                Upgrade
-              </Link>
+          ) : clip.storage_path ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-white/30">
+              <p className="text-4xl mb-3">⏳</p>
+              <p className="text-sm">Generating video link...</p>
+              <p className="text-xs mt-1 text-white/20">Refresh the page in a moment</p>
             </div>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-white/20">
               <p className="text-4xl mb-3">🎬</p>
               <p className="text-sm">No video file available</p>
-              <p className="text-xs mt-1">The clip was found but the file wasn't stored.</p>
+              <p className="text-xs mt-1">The clip was found but the video file wasn't stored.</p>
             </div>
           )}
         </div>

@@ -64,7 +64,7 @@ export default function Nav() {
 
       {/* Left — Logo + module tabs */}
       <div className="flex items-center gap-1">
-        <Link href="/" className="flex items-center gap-0.5 mr-4 flex-shrink-0">
+        <Link href={profile ? '/dashboard' : '/'} className="flex items-center gap-0.5 mr-4 flex-shrink-0">
           <span className="text-[#FF6B00] font-bold text-xl tracking-tight">CLIP</span>
           <span className="font-bold text-xl tracking-tight text-white">FINDER</span>
         </Link>

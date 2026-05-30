@@ -174,13 +174,17 @@ def download_audio(url, tmp, source, cookies_file=None):
     ]
 
     if source == "kick":
-        cmd += [
-            "--add-headers", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "--add-headers", "Referer:https://kick.com/",
-            "--add-headers", "Origin:https://kick.com",
-            "--extractor-retries", "5",
-            "--fragment-retries", "5",
-        ]
+        # If we got a direct CDN URL (clips.kick.com), download it directly
+        if "clips.kick.com" in url:
+            cmd += ["-f", "best", "--no-playlist"]
+        else:
+            cmd += [
+                "--add-headers", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "--add-headers", "Referer:https://kick.com/",
+                "--add-headers", "Origin:https://kick.com",
+                "--extractor-retries", "5",
+                "--fragment-retries", "5",
+            ]
     elif source == "youtube":
         cmd += [
             "--extractor-args", "youtube:player_client=tv_simply,web",
@@ -283,20 +287,22 @@ def cut_clip_section(url, start_ts, end_ts, output_path, cookies_file=None, sour
     
     # For Kick, use the direct CDN URL with ffmpeg instead of yt-dlp
     if source == "kick" and direct_url:
-        # Use ffmpeg directly on the CDN URL — no auth needed
         start_sec = ts_to_seconds(start_ts)
         end_sec = ts_to_seconds(end_ts)
         duration = end_sec - start_sec
+        # Use input seeking (-ss before -i) — fast, no full download needed
         result = subprocess.run([
             "ffmpeg",
-            "-ss", str(start_sec),
+            "-ss", str(start_sec),      # seek BEFORE input = fast
             "-i", direct_url,
             "-t", str(duration),
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
             "-c:a", "aac", "-b:a", "128k",
-            "-avoid_negative_ts", "make_zero",
+            "-movflags", "+faststart",
             str(output_path), "-y", "-loglevel", "error"
         ], capture_output=True, text=True, timeout=180)
+        if result.returncode != 0:
+            print(f"[kick] ffmpeg stderr: {result.stderr[-200:]}")
         return result
 
     section_str = f"*{start_ts}-{end_ts}"
@@ -355,21 +361,38 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
 
         # ── Step 1: Get video info ────────────────────────────────────────────
         update_job(sb, job_id, "downloading", 5, "Fetching video info...")
-        info = get_video_info(source_url, cookies_file, source)
-        video_title = info.get("title", "")
-        video_duration = int(info.get("duration", 0))
-        if video_title:
-            sb.table("jobs").update({"video_title": video_title, "video_duration": video_duration}).eq("id", job_id).execute()
-            print(f"[info] {video_title} ({video_duration}s)")
+        video_title = ""
+        video_duration = 0
 
-        # For Kick, get direct URL early so we can use it for cutting later
+        # For Kick: get direct URL ONCE here, reuse for audio + cutting
+        kick_direct_url = None
         if source == "kick":
-            kick_direct_url, _, _ = get_kick_clip_direct(source_url, tmp)
-            print(f"[kick] stored direct URL for cutting: {kick_direct_url[:60] if kick_direct_url else 'none'}")
+            kick_direct_url, kick_title, kick_duration = get_kick_clip_direct(source_url, tmp)
+            if kick_direct_url:
+                video_title = kick_title or "Kick clip"
+                video_duration = kick_duration or 0
+                print(f"[kick] cached direct URL: {kick_direct_url[:60]}")
+                sb.table("jobs").update({"video_title": video_title, "video_duration": video_duration}).eq("id", job_id).execute()
+                print(f"[info] {video_title} ({video_duration}s)")
+            else:
+                err = "Could not get Kick clip URL"
+                update_job(sb, job_id, "error", 0, err, {"error_msg": err})
+                return
+        else:
+            info = get_video_info(source_url, cookies_file, source)
+            video_title = info.get("title", "")
+            video_duration = int(info.get("duration", 0))
+            if video_title:
+                sb.table("jobs").update({"video_title": video_title, "video_duration": video_duration}).eq("id", job_id).execute()
+                print(f"[info] {video_title} ({video_duration}s)")
 
         # ── Step 2: Download audio ─────────────────────────────────────────────
         update_job(sb, job_id, "downloading", 15, "Downloading audio...")
-        audio_result = download_audio(source_url, tmp, source, cookies_file)
+        # For Kick: use the already-fetched direct URL, skip API call
+        audio_result = download_audio(
+            kick_direct_url if source == "kick" and kick_direct_url else source_url,
+            tmp, source, cookies_file
+        )
         audio_files = list(tmp.glob("audio_raw.*"))
 
         if audio_result.returncode != 0 or not audio_files:

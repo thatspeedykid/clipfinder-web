@@ -21,7 +21,8 @@ type AdminClip = {
 const STATUS_COLOR: Record<string, string> = {
   queued: 'bg-gray-500/20 text-gray-400', downloading: 'bg-blue-500/20 text-blue-400',
   transcribing: 'bg-purple-500/20 text-purple-400', analyzing: 'bg-yellow-500/20 text-yellow-400',
-  cutting: 'bg-orange-500/20 text-orange-400', done: 'bg-green-500/20 text-green-400', error: 'bg-red-500/20 text-red-400',
+  cutting: 'bg-orange-500/20 text-orange-400', done: 'bg-green-500/20 text-green-400',
+  error: 'bg-red-500/20 text-red-400', cancelled: 'bg-white/10 text-white/30',
 }
 
 const TABS = ['jobs', 'users', 'keys', 'flags', 'security', 'clips'] as const
@@ -161,6 +162,11 @@ export default function AdminPage() {
   async function toggleAdmin(userId: string, is_admin: boolean) {
     await authFetch('/api/admin/users', { method: 'PATCH', body: JSON.stringify({ userId, is_admin }) })
     loadUsers(); toast(is_admin ? 'Admin granted' : 'Admin removed')
+  }
+
+  async function cancelJob(jobId: string) {
+    await authFetch(`/api/jobs/${jobId}`, { method: 'PATCH' })
+    toast('Job cancelled'); loadJobs(); loadStats()
   }
 
   async function deleteClip(clipId: string, storagePath?: string) {
@@ -357,9 +363,18 @@ export default function AdminPage() {
                       {job.clips_found ? <p className="text-xs text-green-400">{job.clips_found} clips</p> : null}
                     </div>
                   </div>
-                  {!['done', 'error', 'queued'].includes(job.status) && (
+                  {!['done', 'error', 'queued', 'cancelled'].includes(job.status) && (
                     <div className="h-1 bg-white/10 rounded-full overflow-hidden">
                       <div className="h-full bg-[#FF6B00] rounded-full transition-all duration-500" style={{ width: `${job.progress}%` }} />
+                    </div>
+                  )}
+                  {!['done', 'error', 'cancelled'].includes(job.status) && (
+                    <div className="mt-2">
+                      <button
+                        onClick={() => cancelJob(job.id)}
+                        className="text-xs text-red-400/70 hover:text-red-400 border border-red-400/20 hover:border-red-400/40 px-2.5 py-1 rounded-lg transition-colors">
+                        ✕ Cancel job
+                      </button>
                     </div>
                   )}
                 </div>
