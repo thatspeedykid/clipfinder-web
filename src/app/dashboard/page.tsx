@@ -81,8 +81,9 @@ export default function DashboardPage() {
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null)
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [quota, setQuota] = useState<Quota | null>(null)
-  const [sourceFlags, setSourceFlags] = useState({ youtube: true, kick: true, twitch: true, twitter: true })
+  const [sourceFlags, setSourceFlags] = useState({ youtube: false, kick: true, twitch: true, twitter: true, mode_auto: true, mode_interview: true, mode_auto_edit: true, post_bridge: true, post_scheduler: false, google_drive: false })
   const [url, setUrl] = useState('')
+  const [streamerName, setStreamerName] = useState('')
   const [mode, setMode] = useState<'auto' | 'interview' | 'auto_edit'>('auto')
   const [job, setJob] = useState<Job | null>(null)
   const [clips, setClips] = useState<Clip[]>([])
@@ -98,6 +99,26 @@ export default function DashboardPage() {
   const pollRef = useRef<NodeJS.Timeout | null>(null)
 
   const source = detectSource(url)
+
+  // Auto-extract streamer name from URL
+  useEffect(() => {
+    if (!url) return
+    try {
+      const u = new URL(url)
+      let extracted = ''
+      if (u.hostname.includes('kick.com')) {
+        const parts = u.pathname.split('/').filter(Boolean)
+        extracted = parts[0] && parts[0] !== 'clips' ? parts[0] : ''
+      } else if (u.hostname.includes('twitter.com') || u.hostname.includes('x.com')) {
+        extracted = u.pathname.split('/').filter(Boolean)[0]?.replace('@', '') ?? ''
+      } else if (u.hostname.includes('tiktok.com')) {
+        extracted = u.pathname.split('/').filter(Boolean)[0]?.replace('@', '') ?? ''
+      } else if (u.hostname.includes('twitch.tv')) {
+        extracted = u.pathname.split('/').filter(Boolean)[0] ?? ''
+      }
+      if (extracted) setStreamerName(extracted)
+    } catch {}
+  }, [url])
 
   // Auth
   useEffect(() => {
@@ -310,14 +331,33 @@ export default function DashboardPage() {
               <p className="text-yellow-400/70 text-xs mt-2">⏳ A job is already running. Cancel it or wait for it to finish before starting a new one.</p>
             )}
 
-            <div className="flex gap-2 mt-4 flex-wrap">
-              {(['auto', 'interview', 'auto_edit'] as const).map(m => (
-                <button key={m} type="button" onClick={() => setMode(m)}
-                  className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${mode === m ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30' : 'bg-white/5 text-white/50 border border-white/10 hover:bg-white/10'}`}>
-                  {m === 'auto' && '🎯 Auto clip'}{m === 'interview' && '🎤 Interview'}{m === 'auto_edit' && '✂️ Auto-edit'}
-                  {m !== 'auto' && profile?.tier === 'free' && !profile?.is_admin && ' 🔒'}
+            {/* Streamer name */}
+            <div className="mt-3">
+              <input value={streamerName} onChange={e => setStreamerName(e.target.value)}
+                placeholder="Streamer name (auto-detected from URL)"
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-[#FF6B00]" />
+            </div>
+
+            {/* Clip modes — only show if enabled */}
+            <div className="flex gap-2 mt-3 flex-wrap">
+              {sourceFlags.mode_auto && (
+                <button type="button" onClick={() => setMode('auto')}
+                  className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${mode === 'auto' ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30' : 'bg-white/5 text-white/50 border border-white/10 hover:bg-white/10'}`}>
+                  🎯 Auto clip
                 </button>
-              ))}
+              )}
+              {sourceFlags.mode_interview && (
+                <button type="button" onClick={() => setMode('interview')}
+                  className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${mode === 'interview' ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30' : 'bg-white/5 text-white/50 border border-white/10 hover:bg-white/10'}`}>
+                  🎤 Interview{profile?.tier === 'free' && !profile?.is_admin && ' 🔒'}
+                </button>
+              )}
+              {sourceFlags.mode_auto_edit && (
+                <button type="button" onClick={() => setMode('auto_edit')}
+                  className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${mode === 'auto_edit' ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30' : 'bg-white/5 text-white/50 border border-white/10 hover:bg-white/10'}`}>
+                  ✂️ Auto-edit{profile?.tier === 'free' && !profile?.is_admin && ' 🔒'}
+                </button>
+              )}
             </div>
           </div>
           {error && <p className="text-red-400 text-sm mt-2 pl-1">{error}</p>}
@@ -429,9 +469,9 @@ export default function DashboardPage() {
                           </Link>
                         )}
                         <button
-                          onClick={() => setOpenStudio(isOpen ? null : clip.id)}
-                          className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${isOpen ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}>
-                          ✨ Post Bridge {isOpen ? '▲' : '▼'}
+                          onClick={() => sourceFlags.post_bridge && setOpenStudio(isOpen ? null : clip.id)}
+                          className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${isOpen ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30' : 'bg-white/10 text-white/60 hover:bg-white/20'} ${!sourceFlags.post_bridge ? 'hidden' : ''}`}>
+                          {sourceFlags.post_bridge ? `✨ Post Bridge ${isOpen ? '▲' : '▼'}` : null}
                         </button>
                       </div>
                     </div>
