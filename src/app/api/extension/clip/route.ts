@@ -148,7 +148,7 @@ export async function POST(req: NextRequest) {
 
       // Fire Modal worker
       if (MODAL_WORKER_URL) {
-        fetch(`${MODAL_WORKER_URL}`, {
+        fetch(`${MODAL_WORKER_URL}/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -206,7 +206,7 @@ export async function POST(req: NextRequest) {
 
         // Fire Modal worker (non-blocking)
         if (MODAL_WORKER_URL) {
-          fetch(`${MODAL_WORKER_URL}`, {
+          fetch(`${MODAL_WORKER_URL}/start`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

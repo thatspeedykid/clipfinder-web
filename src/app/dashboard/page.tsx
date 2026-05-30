@@ -81,7 +81,7 @@ export default function DashboardPage() {
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null)
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [quota, setQuota] = useState<Quota | null>(null)
-  const [sourceFlags, setSourceFlags] = useState({ youtube: false, kick: true, twitch: true, twitter: true, mode_auto: true, mode_interview: true, mode_auto_edit: true, post_bridge: true, post_scheduler: false, google_drive: false })
+  const [sourceFlags, setSourceFlags] = useState({ mode_auto: true, mode_interview: true, mode_auto_edit: true, post_bridge: true, youtube: true, kick: true, twitch: true, twitter: true })
   const [url, setUrl] = useState('')
   const [streamerName, setStreamerName] = useState('')
   const [mode, setMode] = useState<'auto' | 'interview' | 'auto_edit'>('auto')
@@ -108,7 +108,7 @@ export default function DashboardPage() {
       let extracted = ''
       if (u.hostname.includes('kick.com')) {
         const parts = u.pathname.split('/').filter(Boolean)
-        extracted = parts[0] && parts[0] !== 'clips' ? parts[0] : ''
+        extracted = (parts[0] && parts[0] !== 'clips') ? parts[0] : ''
       } else if (u.hostname.includes('twitter.com') || u.hostname.includes('x.com')) {
         extracted = u.pathname.split('/').filter(Boolean)[0]?.replace('@', '') ?? ''
       } else if (u.hostname.includes('tiktok.com')) {
@@ -116,7 +116,7 @@ export default function DashboardPage() {
       } else if (u.hostname.includes('twitch.tv')) {
         extracted = u.pathname.split('/').filter(Boolean)[0] ?? ''
       }
-      if (extracted) setStreamerName(extracted)
+      if (extracted && !streamerName) setStreamerName(extracted)
     } catch {}
   }, [url])
 
@@ -337,25 +337,24 @@ export default function DashboardPage() {
                 placeholder="Streamer name (auto-detected from URL)"
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-sm text-white placeholder-white/25 focus:outline-none focus:border-[#FF6B00]" />
             </div>
-
-            {/* Clip modes — only show if enabled */}
+            {/* Clip modes — flag controlled */}
             <div className="flex gap-2 mt-3 flex-wrap">
-              {sourceFlags.mode_auto && (
+              {sourceFlags.mode_auto !== false && (
                 <button type="button" onClick={() => setMode('auto')}
                   className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${mode === 'auto' ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30' : 'bg-white/5 text-white/50 border border-white/10 hover:bg-white/10'}`}>
                   🎯 Auto clip
                 </button>
               )}
-              {sourceFlags.mode_interview && (
+              {sourceFlags.mode_interview !== false && (
                 <button type="button" onClick={() => setMode('interview')}
                   className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${mode === 'interview' ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30' : 'bg-white/5 text-white/50 border border-white/10 hover:bg-white/10'}`}>
-                  🎤 Interview{profile?.tier === 'free' && !profile?.is_admin && ' 🔒'}
+                  🎤 Interview{profile?.tier === 'free' && !profile?.is_admin ? ' 🔒' : ''}
                 </button>
               )}
-              {sourceFlags.mode_auto_edit && (
+              {sourceFlags.mode_auto_edit !== false && (
                 <button type="button" onClick={() => setMode('auto_edit')}
                   className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${mode === 'auto_edit' ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30' : 'bg-white/5 text-white/50 border border-white/10 hover:bg-white/10'}`}>
-                  ✂️ Auto-edit{profile?.tier === 'free' && !profile?.is_admin && ' 🔒'}
+                  ✂️ Auto-edit{profile?.tier === 'free' && !profile?.is_admin ? ' 🔒' : ''}
                 </button>
               )}
             </div>
@@ -469,9 +468,9 @@ export default function DashboardPage() {
                           </Link>
                         )}
                         <button
-                          onClick={() => sourceFlags.post_bridge && setOpenStudio(isOpen ? null : clip.id)}
-                          className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${isOpen ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30' : 'bg-white/10 text-white/60 hover:bg-white/20'} ${!sourceFlags.post_bridge ? 'hidden' : ''}`}>
-                          {sourceFlags.post_bridge ? `✨ Post Bridge ${isOpen ? '▲' : '▼'}` : null}
+                          onClick={() => setOpenStudio(isOpen ? null : clip.id)}
+                          className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${isOpen ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}>
+                          ✨ Post Bridge {isOpen ? '▲' : '▼'}
                         </button>
                       </div>
                     </div>
