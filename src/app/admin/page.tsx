@@ -42,6 +42,8 @@ export default function AdminPage() {
   const [blockedIps, setBlockedIps] = useState<BlockedIp[]>([])
   const [adminClips, setAdminClips] = useState<AdminClip[]>([])
   const [clipsLoading, setClipsLoading] = useState(false)
+  const [keysHealth, setKeysHealth] = useState<Record<string, unknown> | null>(null)
+  const [keysHealthLoading, setKeysHealthLoading] = useState(false)
   const [previewAdminClip, setPreviewAdminClip] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState('active')
@@ -433,7 +435,41 @@ export default function AdminPage() {
         {/* KEYS */}
         {tab === 'keys' && (
           <div className="space-y-6">
-            <p className="text-xs text-white/40">Changes take effect on the next job. Secrets are masked.</p>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <p className="text-xs text-white/40">Changes take effect on the next job. Add _2, _3 suffix for key rotation (e.g. GEMINI_API_KEY_2).</p>
+              <button onClick={async () => {
+                setKeysHealthLoading(true)
+                const r = await authFetch('/api/admin/keys-health')
+                if (r.ok) { const d = await r.json(); setKeysHealth(d) }
+                setKeysHealthLoading(false)
+              }} className="text-xs bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-white/60">
+                {keysHealthLoading ? '⏳ Testing...' : '🔍 Test all keys'}
+              </button>
+            </div>
+
+            {keysHealth && (
+              <div className={`border rounded-xl p-4 ${(keysHealth.working as number) === 0 ? 'bg-red-500/10 border-red-500/20' : (keysHealth.working as number) < (keysHealth.total as number) ? 'bg-yellow-500/10 border-yellow-500/20' : 'bg-green-500/10 border-green-500/20'}`}>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-sm font-medium">{keysHealth.working as number}/{keysHealth.total as number} keys working</p>
+                  {(keysHealth.working as number) === 0 && <span className="text-xs text-red-400">⚠️ No working keys — AI will fail</span>}
+                  {(keysHealth.working as number) > 0 && (keysHealth.working as number) < (keysHealth.total as number) && <span className="text-xs text-yellow-400">⚠️ Some keys rate limited</span>}
+                </div>
+                <div className="space-y-1.5 mb-3">
+                  {((keysHealth.results as {name:string;masked:string;ok:boolean;error?:string;model?:string}[]) ?? []).map((r, i) => (
+                    <div key={i} className="flex items-center justify-between text-xs bg-black/20 rounded-lg px-3 py-2">
+                      <span className="text-white/60">{r.name} <span className="text-white/30 font-mono">{r.masked}</span></span>
+                      {r.ok
+                        ? <span className="text-green-400">✓ Working{r.model ? ` — ${r.model}` : ''}</span>
+                        : <span className="text-red-400">✗ {r.error}</span>
+                      }
+                    </div>
+                  ))}
+                </div>
+                <p className={`text-xs font-mono ${String(keysHealth.modal_worker_url).startsWith('✓') ? 'text-green-400' : 'text-red-400'}`}>
+                  {keysHealth.modal_worker_url as string}
+                </p>
+              </div>
+            )}
             {Object.entries(configGroups).map(([group, rows]) => (
               <div key={group}>
                 <h3 className="text-xs font-medium text-white/40 uppercase tracking-wider mb-2">{group}</h3>

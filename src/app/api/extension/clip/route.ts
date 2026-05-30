@@ -147,8 +147,10 @@ export async function POST(req: NextRequest) {
       createdJobs.push({ jobId: job.id, clipIndex: -1 })
 
       // Fire Modal worker
-      if (MODAL_WORKER_URL) {
-        fetch(`${MODAL_WORKER_URL}/start`, {
+      if (!MODAL_WORKER_URL) {
+        console.error('[extension] MODAL_WORKER_URL not set — job created but worker not triggered. Set MODAL_WORKER_URL in Vercel env vars.')
+      } else if (MODAL_WORKER_URL) {
+        fetch(`${MODAL_WORKER_URL}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -206,7 +208,7 @@ export async function POST(req: NextRequest) {
 
         // Fire Modal worker (non-blocking)
         if (MODAL_WORKER_URL) {
-          fetch(`${MODAL_WORKER_URL}/start`, {
+          fetch(`${MODAL_WORKER_URL}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
