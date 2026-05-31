@@ -1,14 +1,15 @@
 {
   "framework": "nextjs",
   "functions": {
-    "src/app/api/analyze/route.ts": {
-      "maxDuration": 60
-    },
-    "src/app/api/transcribe/route.ts": {
-      "maxDuration": 60
-    },
-    "src/app/api/webhook/route.ts": {
-      "maxDuration": 10
+    "src/app/api/analyze/route.ts": { "maxDuration": 60 },
+    "src/app/api/transcribe/route.ts": { "maxDuration": 60 },
+    "src/app/api/webhook/route.ts": { "maxDuration": 10 },
+    "src/app/api/cron/cleanup/route.ts": { "maxDuration": 60 }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/cleanup",
+      "schedule": "0 3 * * *"
     }
-  }
+  ]
 }

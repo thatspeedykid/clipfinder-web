@@ -187,14 +187,10 @@ export default function AdminPage() {
   }
 
   async function purgeExpiredClips() {
-    const r = await authFetch('/api/admin/clips', { method: 'DELETE', body: JSON.stringify({ deleteAll: true }) })
+    const r = await authFetch('/api/admin/clips', { method: 'DELETE', body: JSON.stringify({ deleteAll: true, expiredOnly: true }) })
     const d = await r.json()
-    if (!r.ok || d.error) {
-      logError(`Purge expired failed: ${d.error ?? r.status}`)
-      toast('Purge failed — check error log')
-    } else {
-      toast(`Purged ${d.deleted} clips (${d.storageDeleted ?? 0} from storage)`)
-    }
+    if (!r.ok || d.error) { logError(`Purge expired failed: ${d.error ?? r.status}`); toast('Purge failed — check error log') }
+    else { toast(`Purged ${d.deleted} expired clips from R2 + DB`) }
     loadClips()
   }
 
@@ -645,10 +641,10 @@ export default function AdminPage() {
                 </button>
                 <button onClick={async () => {
                   if (!confirm('Delete ALL stored clips permanently? This cannot be undone.')) return
-                  const r = await authFetch('/api/admin/clips', { method: 'DELETE', body: JSON.stringify({ deleteAll: true, force: true }) })
+                  const r = await authFetch('/api/admin/clips', { method: 'DELETE', body: JSON.stringify({ deleteAll: true }) })
                   const d = await r.json()
                   if (!r.ok || d.error) { logError(`Purge ALL failed: ${d.error ?? r.status}`); toast('Purge failed — check error log') }
-                  else { toast(`Purged ${d.deleted} clips (${d.storageDeleted ?? 0} from storage)`) }
+                  else { toast(`Deleted ${d.deleted} clips from R2 + DB`) }
                   loadClips()
                 }} className="text-xs bg-red-900/20 text-red-500 border border-red-900/30 px-3 py-1.5 rounded-lg hover:bg-red-900/30">
                   💥 Purge ALL
