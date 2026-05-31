@@ -336,31 +336,108 @@ def cut_clip_section(url, start_ts, end_ts, output_path, cookies_file=None, sour
 
 
 
+def _get_r2_client():
+    """Get boto3 S3 client pointed at Cloudflare R2."""
+    import boto3
+    from botocore.config import Config
+    account_id = os.environ.get("R2_ACCOUNT_ID", "")
+    if not account_id:
+        return None, None
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+        aws_access_key_id=os.environ.get("R2_ACCESS_KEY_ID", ""),
+        aws_secret_access_key=os.environ.get("R2_SECRET_ACCESS_KEY", ""),
+        config=Config(signature_version="s3v4"),
+        region_name="auto",
+    )
+    bucket = os.environ.get("R2_BUCKET_NAME", "clipfinder-clips")
+    return s3, bucket
+
+
+def _enforce_storage_limit(sb, size_mb: float, limit_gb: float = 9.5):
+    """If adding size_mb would exceed limit_gb, delete oldest clips until there's room."""
+    try:
+        # Get total used from DB
+        result = sb.table("clips").select("file_size_mb").not_.is_("storage_path", None).execute()
+        total_mb = sum((r.get("file_size_mb") or 0) for r in (result.data or []))
+        limit_mb = limit_gb * 1024
+        print(f"[storage] used: {total_mb:.0f}MB / {limit_mb:.0f}MB — adding {size_mb:.1f}MB")
+
+        if total_mb + size_mb < limit_mb:
+            return  # Plenty of room
+
+        # Delete oldest clips until we have room
+        needed_mb = (total_mb + size_mb) - limit_mb
+        freed_mb = 0
+        old_clips = sb.table("clips").select("id, storage_path, file_size_mb")             .not_.is_("storage_path", None)             .order("created_at", ascending=True)             .limit(50).execute()
+
+        s3, bucket = _get_r2_client()
+        for clip in (old_clips.data or []):
+            if freed_mb >= needed_mb:
+                break
+            path = clip.get("storage_path", "")
+            clip_size = clip.get("file_size_mb") or 0
+            if path and s3 and bucket:
+                try:
+                    s3.delete_object(Bucket=bucket, Key=path)
+                    print(f"[storage] auto-purged old clip {clip['id'][:8]} ({clip_size:.1f}MB) to free space")
+                except Exception as e:
+                    print(f"[storage] delete failed: {e}")
+            sb.table("clips").update({"file_url": None, "storage_path": None, "file_expires_at": None}).eq("id", clip["id"]).execute()
+            freed_mb += clip_size
+        print(f"[storage] freed {freed_mb:.1f}MB to make room")
+    except Exception as e:
+        print(f"[storage] enforce limit error: {e}")
+
+
 def _upload_clip_to_storage(sb, clip_path, user_id, job_id, clip_num, clip_id, start_ts):
-    """Upload a clip file to Supabase Storage and update the clip record."""
+    """Upload a clip file to Cloudflare R2 and update the clip record."""
     from datetime import datetime, timedelta
     try:
         profile_res = sb.table("profiles").select("tier").eq("id", user_id).single().execute()
         tier = (profile_res.data or {}).get("tier", "free")
         expires = datetime.utcnow() + (timedelta(hours=12) if tier == "free" else timedelta(days=15))
         storage_path = f"{user_id}/{job_id}/clip_{clip_num}.mp4"
-        with open(clip_path, "rb") as f:
-            clip_data = f.read()
-        sb.storage.from_("clips").upload(path=storage_path, file=clip_data, file_options={"content-type": "video/mp4", "upsert": "true"})
-        sign_seconds = int((expires - datetime.utcnow()).total_seconds())
-        signed = sb.storage.from_("clips").create_signed_url(storage_path, sign_seconds)
-        file_url = signed.get("signedURL", "")
         size_mb = round(clip_path.stat().st_size / 1024 / 1024, 2)
+
+        # Check and enforce 9.5GB limit before uploading
+        _enforce_storage_limit(sb, size_mb)
+
+        s3, bucket = _get_r2_client()
+        if not s3:
+            print(f"[storage] R2 not configured — skipping upload")
+            clip_path.unlink(missing_ok=True)
+            return False
+
+        # Upload to R2
+        s3.upload_file(
+            str(clip_path), bucket, storage_path,
+            ExtraArgs={"ContentType": "video/mp4"}
+        )
+
+        # Generate pre-signed URL valid until expiry
+        sign_seconds = int((expires - datetime.utcnow()).total_seconds())
+        file_url = s3.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket, "Key": storage_path},
+            ExpiresIn=sign_seconds,
+        )
+
         if clip_id:
             sb.table("clips").update({
-                "file_url": file_url, "file_expires_at": expires.isoformat(),
-                "file_size_mb": size_mb, "storage_path": storage_path
+                "file_url": file_url,
+                "file_expires_at": expires.isoformat(),
+                "file_size_mb": size_mb,
+                "storage_path": storage_path,
             }).eq("id", clip_id).execute()
-        print(f"[storage] clip {clip_num} uploaded {size_mb}MB — expires {expires.strftime('%Y-%m-%d %H:%M')} UTC")
+
+        print(f"[r2] clip {clip_num} uploaded {size_mb}MB → expires {expires.strftime('%Y-%m-%d %H:%M')} UTC")
         clip_path.unlink(missing_ok=True)
         return True
+
     except Exception as e:
-        print(f"[storage] upload failed for clip {clip_num}: {e}")
+        print(f"[r2] upload failed for clip {clip_num}: {e}")
         clip_path.unlink(missing_ok=True)
         return False
 
@@ -828,16 +905,19 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
                 with open(clip_path, "rb") as f:
                     clip_data = f.read()
 
-                sb.storage.from_("clips").upload(
-                    path=storage_path,
-                    file=clip_data,
-                    file_options={"content-type": "video/mp4", "upsert": "true"}
-                )
-
-                # Get signed URL valid for expiry duration
+                # Upload to R2
+                _enforce_storage_limit(sb, clip_size_mb)
+                s3, bucket = _get_r2_client()
+                if not s3:
+                    print(f"[r2] not configured, skipping")
+                    clip_path.unlink(missing_ok=True)
+                    continue
+                s3.upload_file(str(clip_path), bucket, storage_path,
+                    ExtraArgs={"ContentType": "video/mp4"})
                 sign_seconds = int((expires - datetime.utcnow()).total_seconds())
-                signed = sb.storage.from_("clips").create_signed_url(storage_path, sign_seconds)
-                file_url = signed.get("signedURL", "")
+                file_url = s3.generate_presigned_url("get_object",
+                    Params={"Bucket": bucket, "Key": storage_path},
+                    ExpiresIn=sign_seconds)
 
                 # Update clip record — use the real Supabase UUID from our map
                 clip_id = clip_id_map.get(start_ts, "")

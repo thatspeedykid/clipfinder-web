@@ -45,6 +45,7 @@ export default function AdminPage() {
   const [keysHealth, setKeysHealth] = useState<Record<string, unknown> | null>(null)
   const [keysHealthLoading, setKeysHealthLoading] = useState(false)
   const [adminErrorLog, setAdminErrorLog] = useState<string[]>([])
+  const [storage, setStorage] = useState<{totalGb:number,limitGb:number,pct:number,clipCount:number,safe:boolean,warning:boolean,critical:boolean} | null>(null)
   const [previewAdminClip, setPreviewAdminClip] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState('active')
@@ -313,7 +314,7 @@ export default function AdminPage() {
 
       {/* Stats */}
       {stats && (
-        <div className="px-6 py-4 grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <div className="px-6 py-4 grid grid-cols-2 sm:grid-cols-6 gap-3">
           {[
             { label: 'Total users', value: stats.totalUsers },
             { label: 'Jobs today', value: stats.jobsToday },
@@ -326,6 +327,27 @@ export default function AdminPage() {
               <p className={`text-2xl font-semibold ${s.hot ? 'text-[#FF6B00]' : ''}`}>{s.value}</p>
             </div>
           ))}
+          {/* R2 Storage meter */}
+          {storage ? (
+            <div className={`rounded-xl p-4 col-span-2 sm:col-span-1 ${storage.critical ? 'bg-red-500/10 border border-red-500/30' : storage.warning ? 'bg-yellow-500/10 border border-yellow-500/20' : 'bg-white/5'}`}>
+              <p className="text-xs text-white/40 mb-1">R2 Storage</p>
+              <p className={`text-lg font-semibold leading-none mb-1 ${storage.critical ? 'text-red-400' : storage.warning ? 'text-yellow-400' : ''}`}>
+                {storage.totalGb.toFixed(2)}<span className="text-xs text-white/30"> / {storage.limitGb}GB</span>
+              </p>
+              <div className="h-1 bg-white/10 rounded-full overflow-hidden mb-1">
+                <div className={`h-full rounded-full ${storage.critical ? 'bg-red-500' : storage.warning ? 'bg-yellow-500' : 'bg-green-500'}`}
+                  style={{ width: `${storage.pct}%` }} />
+              </div>
+              <p className="text-xs text-white/30">{storage.pct}% · {storage.clipCount} clips</p>
+              {storage.critical && <p className="text-xs text-red-400 font-medium mt-0.5">⚠️ Auto-purging old clips</p>}
+              {storage.warning && <p className="text-xs text-yellow-400 mt-0.5">⚠️ Running low</p>}
+            </div>
+          ) : (
+            <div className="bg-white/5 rounded-xl p-4">
+              <p className="text-xs text-white/40 mb-1">R2 Storage</p>
+              <p className="text-xs text-white/20">Loading...</p>
+            </div>
+          )}
         </div>
       )}
 
