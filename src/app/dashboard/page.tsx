@@ -88,6 +88,7 @@ export default function DashboardPage() {
   const [clips, setClips] = useState<Clip[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [cancelling, setCancelling] = useState(false)
+  const [videoErrors, setVideoErrors] = useState<Set<string>>(new Set())
   const [error, setError] = useState('')
   const [showCookieReminder, setShowCookieReminder] = useState(false)
   const [openStudio, setOpenStudio] = useState<string | null>(null)
@@ -131,7 +132,7 @@ export default function DashboardPage() {
       try {
         const parsed = JSON.parse(saved)
         // Keep for 30 minutes regardless of status
-        if (Date.now() - parsed.savedAt < 30 * 60 * 1000) {
+        if (Date.now() - parsed.savedAt < 60 * 60 * 1000) {
           setJob(parsed.job)
           if (parsed.url) setUrl(parsed.url)
           // Restore clips too
@@ -222,7 +223,7 @@ export default function DashboardPage() {
     const res = await fetch(workerUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId: jobData.jobId, url: targetUrl, mode, userId: user?.id, authToken: process.env.NEXT_PUBLIC_WORKER_SECRET ?? '' }),
+      body: JSON.stringify({ jobId: jobData.jobId, url: targetUrl, mode, userId: user?.id, authToken: process.env.NEXT_PUBLIC_WORKER_SECRET ?? '', streamerName: streamerName || '' }),
     })
     setSubmitting(false)
     if (!res.ok) { const d = await res.json().catch(() => ({})); setError(d.error ?? 'Failed to start'); return }
@@ -264,7 +265,7 @@ export default function DashboardPage() {
       const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tokenRef.current}` },
-        body: JSON.stringify({ clipId, platform: studio.platform, tone: studio.tone }),
+        body: JSON.stringify({ clipId, platform: studio.platform, tone: studio.tone, streamerName: streamerName || '' }),
       })
       const data = await res.json()
       setStudios(prev => ({ ...prev, [clipId]: { ...prev[clipId], generating: false, options: data.options ?? [], hook: data.hook_line ?? '' } }))
@@ -450,17 +451,20 @@ export default function DashboardPage() {
 
                       {/* LEFT — big video */}
                       <div className="lg:w-[45%] bg-black flex items-center justify-center" style={{ minHeight: '220px' }}>
-                        {clip.file_url ? (
+                        {clip.file_url && !videoErrors.has(clip.id) ? (
                           <video src={clip.file_url} controls className="w-full h-full object-contain" style={{ maxHeight: '280px' }}
-                            onError={async () => {
-                              if (clip.storage_path) {
-                                const { data: s } = await supabase.storage.from('clips').createSignedUrl(clip.storage_path, 3600)
-                                if (s?.signedUrl) setClips(prev => prev.map(c => c.id === clip.id ? { ...c, file_url: s.signedUrl } : c))
-                              }
+                            onError={() => {
+                              // Mark as error - hide blank video
+                              setVideoErrors(prev => new Set([...prev, clip.id]))
                             }} />
-                        ) : clip.storage_path ? (
+                        ) : clip.storage_path && !videoErrors.has(clip.id) ? (
                           <ClipVideoLoader storagePath={clip.storage_path} supabase={supabase}
                             onUrl={(url) => setClips(prev => prev.map(c => c.id === clip.id ? { ...c, file_url: url } : c))} />
+                        ) : videoErrors.has(clip.id) ? (
+                          <div className="text-center text-white/20 p-6">
+                            <p className="text-3xl mb-2">⚠️</p>
+                            <p className="text-sm">Video unavailable</p>
+                          </div>
                         ) : (
                           <div className="text-center text-white/20 p-6">
                             <p className="text-3xl mb-2">🎬</p>
