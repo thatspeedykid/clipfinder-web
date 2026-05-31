@@ -44,6 +44,7 @@ export default function AdminPage() {
   const [clipsLoading, setClipsLoading] = useState(false)
   const [keysHealth, setKeysHealth] = useState<Record<string, unknown> | null>(null)
   const [keysHealthLoading, setKeysHealthLoading] = useState(false)
+  const [adminErrorLog, setAdminErrorLog] = useState<string[]>([])
   const [previewAdminClip, setPreviewAdminClip] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState('active')
@@ -179,13 +180,21 @@ export default function AdminPage() {
     toast('Clip deleted'); loadClips()
   }
 
+  function logError(msg: string) {
+    const ts = new Date().toLocaleTimeString()
+    setAdminErrorLog(prev => [`[${ts}] ${msg}`, ...prev].slice(0, 50))
+  }
+
   async function purgeExpiredClips() {
-    const r = await authFetch('/api/admin/clips', {
-      method: 'DELETE',
-      body: JSON.stringify({ deleteAll: true })
-    })
+    const r = await authFetch('/api/admin/clips', { method: 'DELETE', body: JSON.stringify({ deleteAll: true }) })
     const d = await r.json()
-    toast(`Purged ${d.deleted} expired clips`); loadClips()
+    if (!r.ok || d.error) {
+      logError(`Purge expired failed: ${d.error ?? r.status}`)
+      toast('Purge failed — check error log')
+    } else {
+      toast(`Purged ${d.deleted} clips (${d.storageDeleted ?? 0} from storage)`)
+    }
+    loadClips()
   }
 
   async function setUserPassword(userId: string) {
@@ -615,7 +624,10 @@ export default function AdminPage() {
                 <button onClick={async () => {
                   if (!confirm('Delete ALL stored clips permanently? This cannot be undone.')) return
                   const r = await authFetch('/api/admin/clips', { method: 'DELETE', body: JSON.stringify({ deleteAll: true, force: true }) })
-                  const d = await r.json(); toast(`Purged ${d.deleted} clips`); loadClips()
+                  const d = await r.json()
+                  if (!r.ok || d.error) { logError(`Purge ALL failed: ${d.error ?? r.status}`); toast('Purge failed — check error log') }
+                  else { toast(`Purged ${d.deleted} clips (${d.storageDeleted ?? 0} from storage)`) }
+                  loadClips()
                 }} className="text-xs bg-red-900/20 text-red-500 border border-red-900/30 px-3 py-1.5 rounded-lg hover:bg-red-900/30">
                   💥 Purge ALL
                 </button>

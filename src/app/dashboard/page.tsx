@@ -303,7 +303,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="flex-1 w-full px-6 py-8">
+      <div className="flex-1 max-w-6xl mx-auto w-full px-6 py-8">
 
         {/* URL Input */}
         <form onSubmit={handleSubmit} className="mb-8">

@@ -32,7 +32,7 @@ secrets = [modal.Secret.from_name("clipfinder-secrets")]
 
 # Clip duration limits
 CLIP_MIN_SEC = 30    # Minimum clip duration (skip clips shorter than this)
-CLIP_MAX_SEC = 180   # Maximum clip duration (3 minutes)
+CLIP_MAX_SEC = 105   # Maximum clip duration (1min 45s with wiggle room)
 
 
 
@@ -397,7 +397,7 @@ def _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, s
             "-t", str(duration),
             "-vf", "scale=-2:720",
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-            "-c:a", "aac", "-b:a", "64k",
+            "-c:a", "aac", "-b:a", "96k",
             "-movflags", "+faststart",
             str(clip_path), "-y", "-loglevel", "error"
         ], capture_output=True, text=True, timeout=120)
@@ -426,7 +426,7 @@ def _upload_clips_from_hls(sb, tmp, source_url, clips_data, clip_id_map, job_id,
             "-t", str(duration),
             "-vf", "scale=-2:720",
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-            "-c:a", "aac", "-b:a", "64k",
+            "-c:a", "aac", "-b:a", "96k",
             "-movflags", "+faststart",
             str(clip_path), "-y", "-loglevel", "error"
         ], capture_output=True, text=True, timeout=120)
@@ -507,7 +507,7 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
                     "-t", str(seg_duration_capped),
                     "-vf", "scale=-2:720",
                     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-                    "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart",
+                    "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart",
                     str(full_clip_path), "-y", "-loglevel", "error"
                 ], capture_output=True, text=True, timeout=180)
 
