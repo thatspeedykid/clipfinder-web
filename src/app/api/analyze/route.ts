@@ -90,39 +90,39 @@ async function analyzeWithAllKeys(prompt: string): Promise<{ clips: unknown[], p
   const groqKeys = getKeys('GROQ_API_KEY')
   const orKeys = getKeys('OPENROUTER_API_KEY')
 
-  console.log(`[analyze] firing ${geminiKeys.length} Gemini + ${groqKeys.length} Groq + ${orKeys.length} OpenRouter keys in parallel`)
-
-  const calls: Promise<{ provider: string; raw: string }>[] = [
-    ...geminiKeys.map((key, i) =>
-      callGeminiKey(key, prompt).then(raw => ({ provider: `gemini-${i + 1}`, raw }))
-    ),
-    ...groqKeys.map((key, i) =>
-      callGroqKey(key, prompt).then(raw => ({ provider: `groq-${i + 1}`, raw }))
-    ),
-    ...orKeys.map((key, i) =>
-      callOpenRouterKey(key, prompt).then(raw => ({ provider: `openrouter-${i + 1}`, raw }))
-    ),
+  // Sequential with fallback — try one key at a time to preserve quota
+  // Order: Gemini keys first (best), then Groq (fast), then OpenRouter (backup)
+  const sequence: { name: string; fn: () => Promise<string> }[] = [
+    ...geminiKeys.map((key, i) => ({
+      name: `gemini-${i+1}`,
+      fn: () => callGeminiKey(key, prompt)
+    })),
+    ...groqKeys.map((key, i) => ({
+      name: `groq-${i+1}`,
+      fn: () => callGroqKey(key, prompt)
+    })),
+    ...orKeys.map((key, i) => ({
+      name: `openrouter-${i+1}`,
+      fn: () => callOpenRouterKey(key, prompt)
+    })),
   ]
 
-  if (calls.length === 0) throw new Error('No API keys configured')
+  if (sequence.length === 0) throw new Error('No API keys configured')
 
-  const results = await Promise.allSettled(calls)
+  console.log(`[analyze] sequential: ${geminiKeys.length} Gemini → ${groqKeys.length} Groq → ${orKeys.length} OpenRouter`)
 
-  const successes = results
-    .filter((r): r is PromiseFulfilledResult<{ provider: string; raw: string }> => r.status === 'fulfilled')
-    .sort((a, b) => {
-      const rank = (p: string) => p.startsWith('gemini') ? 0 : p.startsWith('groq') ? 1 : 2
-      return rank(a.value.provider) - rank(b.value.provider)
-    })
-
-  for (const result of successes) {
+  for (const { name, fn } of sequence) {
     try {
-      const clips = parseClips(result.value.raw)
+      const raw = await fn()
+      const clips = parseClips(raw)
       if (clips.length > 0) {
-        console.log(`[analyze] winner: ${result.value.provider} with ${clips.length} clips`)
-        return { clips, provider: result.value.provider }
+        console.log(`[analyze] success: ${name} with ${clips.length} clips`)
+        return { clips, provider: name }
       }
-    } catch { continue }
+      console.log(`[analyze] ${name} returned 0 clips, trying next`)
+    } catch (e) {
+      console.log(`[analyze] ${name} failed: ${e instanceof Error ? e.message : e}, trying next`)
+    }
   }
 
   throw new Error('All API keys failed or returned no clips')
