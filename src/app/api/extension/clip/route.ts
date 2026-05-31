@@ -94,7 +94,10 @@ export async function POST(req: NextRequest) {
             jobId: job.id, url: vod_url, userId, mode,
             authToken: WORKER_SECRET,
             streamerName,
-            segments: segments.map((s: {url: string, index: number}) => ({ url: s.url, index: s.index })),
+            segments: segments.map((s: {url: string, index: number, id?: string}) => ({ url: s.url, index: s.index })),
+            is_multi_segment: Array.isArray(segments) && segments.length > 1,
+            total_duration_sec: body.total_duration_sec ?? segments.length * 90,
+            segment_count: segments.length,
           }),
         }).catch(err => console.error('[extension/clip] worker fire failed:', err))
       }
