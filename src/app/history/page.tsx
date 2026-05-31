@@ -42,6 +42,7 @@ export default function HistoryPage() {
   const [jobClips, setJobClips] = useState<Record<string, Clip[]>>({})
   const [loadingClips, setLoadingClips] = useState<string | null>(null)
   const [previewClip, setPreviewClip] = useState<string | null>(null)
+  const [clearing, setClearing] = useState(false)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -84,6 +85,29 @@ export default function HistoryPage() {
 
   const totalPages = Math.ceil(totalJobs / JOBS_PER_PAGE)
 
+  async function clearJob(jobId: string) {
+    if (!confirm('Delete this job and all its clips? Files will be removed from storage.')) return
+    await fetch('/api/user/history', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ jobId }),
+    })
+    setJobs(prev => prev.filter(j => j.id !== jobId))
+    setJobClips(prev => { const n = {...prev}; delete n[jobId]; return n })
+    if (expandedJob === jobId) setExpandedJob(null)
+  }
+
+  async function clearAllHistory() {
+    if (!confirm('Delete ALL your history and clips? This removes everything from storage permanently.')) return
+    setClearing(true)
+    await fetch('/api/user/history', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({}),
+    })
+    setJobs([]); setJobClips({}); setTotalJobs(0); setClearing(false)
+  }
+
   async function loadClips(jobId: string) {
     if (expandedJob === jobId) { setExpandedJob(null); return }
     setExpandedJob(jobId)
@@ -114,7 +138,15 @@ export default function HistoryPage() {
       <div className="flex-1 max-w-5xl mx-auto w-full px-4 py-10">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-xl font-semibold">History</h1>
-          <p className="text-xs text-white/30">{totalJobs} total jobs</p>
+          <div className="flex items-center gap-3">
+            <p className="text-xs text-white/30">{totalJobs} total jobs</p>
+            {jobs.length > 0 && (
+              <button onClick={clearAllHistory} disabled={clearing}
+                className="text-xs text-red-400/70 hover:text-red-400 border border-red-500/20 px-3 py-1.5 rounded-lg hover:bg-red-500/10 disabled:opacity-50 transition-colors">
+                {clearing ? 'Clearing...' : '🗑 Clear all history'}
+              </button>
+            )}
+          </div>
         </div>
 
         {loading && <p className="text-white/30 text-sm text-center py-12">Loading...</p>}
@@ -149,6 +181,10 @@ export default function HistoryPage() {
                       <span className="text-xs bg-green-500/20 text-green-400 px-2 py-1 rounded-full">{job.clips_found} clips</span>
                     ) : null}
                     {job.status === 'done' && <span className="text-white/30 text-xs">{expandedJob === job.id ? '▲' : '▼'}</span>}
+                  <button onClick={e => { e.stopPropagation(); clearJob(job.id) }}
+                    className="text-xs text-red-400/50 hover:text-red-400 px-2 py-1 rounded hover:bg-red-500/10 transition-colors ml-1">
+                    🗑
+                  </button>
                   </div>
                 </div>
                 {!['done', 'error', 'queued', 'cancelled'].includes(job.status) && (
