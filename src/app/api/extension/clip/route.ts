@@ -45,7 +45,9 @@ export async function POST(req: NextRequest) {
 
     // ── Auth via API key ─────────────────────────────────────────────────────
     const apiKey = req.headers.get('x-api-key') ?? req.headers.get('authorization')?.replace('Bearer ', '')
+    console.log('[extension/clip] POST received, apiKey present:', !!apiKey, 'key prefix:', apiKey?.slice(0,8))
     if (!apiKey) {
+      console.log('[extension/clip] rejected - no api key')
       return NextResponse.json({ error: 'Missing API key. Include X-Api-Key header.' }, { status: 401 })
     }
 
