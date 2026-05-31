@@ -190,7 +190,7 @@ export async function POST(req: NextRequest) {
       score: clip.score as number, hook: clip.hook as number,
       engagement: clip.engagement as number, shareability: clip.shareability as number,
       speaker: clip.speaker as string,
-      duration_sec: tsToSeconds(clip.end as string) - tsToSeconds(clip.start as string),
+      duration_sec: Math.round(tsToSeconds(clip.end as string) - tsToSeconds(clip.start as string)),
     }))
 
     const { error: insertError } = await supabase.from('clips').insert(clipRows)
