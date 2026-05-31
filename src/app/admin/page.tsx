@@ -154,7 +154,7 @@ export default function AdminPage() {
   async function saveKey(key: string) {
     setSaving(true)
     await authFetch('/api/admin/config', { method: 'PATCH', body: JSON.stringify({ key, value: editValue }) })
-    setSaving(false); setEditingKey(null); setEditValue(''); loadConfig(); toast('Key saved')
+    setSaving(false); setEditingKey(null); setEditValue(''); loadConfig()
   }
 
   async function clearKey(key: string) {
