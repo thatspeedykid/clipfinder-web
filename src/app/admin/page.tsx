@@ -520,8 +520,7 @@ export default function AdminPage() {
                         <div className="bg-white/3 border border-white/5 rounded-lg px-3 py-2 text-xs text-red-400/60">No {label} keys set</div>
                       )}
                       {aiRows.map((row, idx) => {
-                        const keyNum = row.key === envBase ? 1 : parseInt(row.key.split('_').pop() ?? '1')
-                        const healthKey = `${healthPrefix === 'gemini' ? 'Gemini' : healthPrefix === 'groq' ? 'Groq' : 'OpenRouter'} #${keyNum}`
+                        const healthKey = row.key  // use env var name directly as key
                         const testResult = keyTestResults[healthKey]
                         return (
                           <div key={row.key} className="bg-white/5 border border-white/10 rounded-xl p-3">
@@ -554,16 +553,11 @@ export default function AdminPage() {
                                 <div className="flex gap-1.5 flex-shrink-0">
                                   <button onClick={async () => {
                                     setTestingKey(row.key)
-                                    // Test all keys and update all results at once
-                                    const r = await authFetch('/api/admin/keys-health')
+                                    const r = await authFetch(`/api/admin/keys-health?key=${row.key}&type=${healthPrefix}`)
                                     if (r.ok) {
                                       const d = await r.json()
-                                      const newResults: Record<string, {ok: boolean, error?: string}> = {}
-                                      for (const res of (d.results ?? [])) {
-                                        newResults[res.name] = { ok: res.ok, error: res.error }
-                                      }
-                                      setKeyTestResults(newResults)
-                                      setKeysHealth(d)
+                                      const res = d.results?.[0]
+                                      if (res) setKeyTestResults(prev => ({ ...prev, [row.key]: { ok: res.ok, error: res.error } }))
                                     }
                                     setTestingKey(null)
                                   }} className="text-xs bg-white/5 border border-white/10 px-2 py-1.5 rounded-lg hover:bg-white/10 text-white/40">
