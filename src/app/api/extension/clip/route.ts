@@ -67,7 +67,34 @@ export async function POST(req: NextRequest) {
 
     // ── Validate body ────────────────────────────────────────────────────────
     const body = await req.json()
-    const { vod_url, clips, streamer_name: streamerName = "", mode = 'auto', batch = false, stream_id } = body
+    const { vod_url, clips, streamer_name: streamerName = "", mode = 'auto', batch = false, stream_id, segments, live_url } = body
+
+    // ── Segments mode (3x Kick clips to concat) ──────────────────────────────
+    if (segments && Array.isArray(segments) && segments.length > 0) {
+      const quota = await checkQuota(userId)
+      if (!quota.allowed) return NextResponse.json({ error: quota.message }, { status: 429 })
+
+      const { data: job } = await supabase.from('jobs')
+        .insert({ user_id: userId, source_url: vod_url, mode, status: 'queued', progress: 0, progress_msg: 'Queued...' })
+        .select('id').single()
+
+      if (!job) return NextResponse.json({ error: 'Failed to create job' }, { status: 500 })
+
+      if (MODAL_WORKER_URL) {
+        fetch(MODAL_WORKER_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jobId: job.id, url: vod_url, userId, mode,
+            authToken: WORKER_SECRET,
+            streamerName,
+            segments: segments.map((s: {url: string, index: number}) => ({ url: s.url, index: s.index })),
+          }),
+        }).catch(err => console.error('[extension/clip] worker fire failed:', err))
+      }
+
+      return NextResponse.json({ success: true, jobs: [{ jobId: job.id }] })
+    }
 
     if (!vod_url || typeof vod_url !== 'string') {
       return NextResponse.json({ error: 'vod_url is required.' }, { status: 400 })
