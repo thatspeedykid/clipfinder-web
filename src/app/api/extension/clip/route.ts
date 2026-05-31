@@ -70,6 +70,10 @@ export async function POST(req: NextRequest) {
     const { vod_url, clips, streamer_name: streamerName = "", mode = 'auto', batch = false, stream_id, segments, live_url } = body
 
     // ── Segments mode (3x Kick clips to concat) ──────────────────────────────
+    console.log('[extension/clip] body keys:', Object.keys(body))
+    console.log('[extension/clip] segments:', JSON.stringify(segments)?.slice(0, 200))
+    console.log('[extension/clip] clips:', JSON.stringify(clips)?.slice(0, 100))
+    console.log('[extension/clip] vod_url:', vod_url?.slice(0, 80))
     if (segments && Array.isArray(segments) && segments.length > 0) {
       const quota = await checkQuota(userId)
       if (!quota.allowed) return NextResponse.json({ error: quota.message }, { status: 429 })
