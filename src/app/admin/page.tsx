@@ -44,6 +44,10 @@ export default function AdminPage() {
   const [clipsLoading, setClipsLoading] = useState(false)
   const [keysHealth, setKeysHealth] = useState<Record<string, unknown> | null>(null)
   const [keysHealthLoading, setKeysHealthLoading] = useState(false)
+  const [testingKey, setTestingKey] = useState<string | null>(null)
+  const [keyTestResults, setKeyTestResults] = useState<Record<string, {ok: boolean, error?: string}>>({})
+  const [addingKey, setAddingKey] = useState<string | null>(null)
+  const [newKeyValue, setNewKeyValue] = useState('')
   const [adminErrorLog, setAdminErrorLog] = useState<string[]>([])
   const [storage, setStorage] = useState<{totalGb:number,limitGb:number,pct:number,clipCount:number,safe:boolean,warning:boolean,critical:boolean} | null>(null)
   const [previewAdminClip, setPreviewAdminClip] = useState<string | null>(null)
@@ -462,46 +466,145 @@ export default function AdminPage() {
         {/* KEYS */}
         {tab === 'keys' && (
           <div className="space-y-6">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <p className="text-xs text-white/40">Changes take effect on the next job. Add _2, _3 suffix for key rotation (e.g. GEMINI_API_KEY_2).</p>
-              <button onClick={async () => {
-                setKeysHealthLoading(true)
-                const r = await authFetch('/api/admin/keys-health')
-                if (r.ok) { const d = await r.json(); setKeysHealth(d) }
-                setKeysHealthLoading(false)
-              }} className="text-xs bg-white/5 border border-white/10 px-3 py-1.5 rounded-lg hover:bg-white/10 text-white/60">
-                {keysHealthLoading ? '⏳ Testing...' : '🔍 Test all keys'}
-              </button>
+
+            {/* AI Keys Section */}
+            <div className="bg-white/3 border border-white/10 rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="font-medium text-sm">AI API Keys</h3>
+                  <p className="text-xs text-white/30 mt-0.5">Gemini → Groq → OpenRouter. Add _2, _3 etc for rotation.</p>
+                </div>
+                <button onClick={async () => {
+                  setKeysHealthLoading(true); setKeyTestResults({})
+                  const r = await authFetch('/api/admin/keys-health')
+                  if (r.ok) {
+                    const d = await r.json()
+                    setKeysHealth(d)
+                    const results: Record<string, {ok: boolean, error?: string}> = {}
+                    for (const res of (d.results ?? [])) results[res.name] = { ok: res.ok, error: res.error }
+                    setKeyTestResults(results)
+                  }
+                  setKeysHealthLoading(false)
+                }} className="text-xs bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30 px-3 py-1.5 rounded-lg hover:bg-[#FF6B00]/30">
+                  {keysHealthLoading ? '⏳ Testing all...' : '🔍 Test all keys'}
+                </button>
+              </div>
+
+              {keysHealth && (
+                <div className={`rounded-xl px-4 py-3 mb-4 text-xs ${(keysHealth.working as number) === 0 ? 'bg-red-500/10 text-red-400' : (keysHealth.working as number) < (keysHealth.total as number) ? 'bg-yellow-500/10 text-yellow-400' : 'bg-green-500/10 text-green-400'}`}>
+                  {keysHealth.working as number}/{keysHealth.total as number} keys working
+                  {(keysHealth.working as number) === 0 && ' — AI will fail on all requests'}
+                  <span className={`ml-4 ${String(keysHealth.modal_worker_url).startsWith('✓') ? 'text-green-400' : 'text-red-400'}`}>
+                    Modal: {keysHealth.modal_worker_url as string}
+                  </span>
+                </div>
+              )}
+
+              {/* Gemini */}
+              {[['Gemini', 'GEMINI_API_KEY', 'gemini'], ['Groq', 'GROQ_API_KEY', 'groq'], ['OpenRouter', 'OPENROUTER_API_KEY', 'openrouter']].map(([label, envBase, healthPrefix]) => {
+                const aiRows = config.filter(r => r.key.startsWith(envBase))
+                const existingNums = aiRows.map(r => parseInt(r.key.replace(envBase, '').replace('_','') || '1')).sort()
+                const nextNum = existingNums.length === 0 ? 1 : Math.max(...existingNums) + 1
+                const nextKey = nextNum === 1 ? envBase : `${envBase}_${nextNum}`
+                return (
+                  <div key={envBase} className="mb-5 last:mb-0">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-medium text-white/50 uppercase tracking-wide">{label}</span>
+                      <button onClick={() => { setAddingKey(nextKey); setNewKeyValue('') }}
+                        className="text-xs text-[#FF6B00]/70 hover:text-[#FF6B00] border border-[#FF6B00]/20 px-2 py-1 rounded-lg hover:bg-[#FF6B00]/10">
+                        + Add key {nextNum > 1 ? `#${nextNum}` : ''}
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      {aiRows.length === 0 && (
+                        <div className="bg-white/3 border border-white/5 rounded-lg px-3 py-2 text-xs text-red-400/60">No {label} keys set</div>
+                      )}
+                      {aiRows.map((row, idx) => {
+                        const keyNum = row.key === envBase ? 1 : parseInt(row.key.split('_').pop() ?? '1')
+                        const healthKey = `${healthPrefix === 'gemini' ? 'Gemini' : healthPrefix === 'groq' ? 'Groq' : 'OpenRouter'} #${keyNum}`
+                        const testResult = keyTestResults[healthKey]
+                        return (
+                          <div key={row.key} className="bg-white/5 border border-white/10 rounded-xl p-3">
+                            <div className="flex items-center gap-3">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-mono text-white/40">{row.key}</span>
+                                  {testResult && (
+                                    <span className={`text-xs ${testResult.ok ? 'text-green-400' : 'text-red-400'}`}>
+                                      {testResult.ok ? '✓ Working' : `✗ ${testResult.error}`}
+                                    </span>
+                                  )}
+                                  {testingKey === row.key && <span className="text-xs text-white/30">Testing...</span>}
+                                </div>
+                                {editingKey === row.key ? (
+                                  <div className="flex gap-2 mt-2">
+                                    <input type="password" value={editValue} onChange={e => setEditValue(e.target.value)}
+                                      placeholder="Paste new key..." autoFocus
+                                      className="flex-1 bg-white/5 border border-white/20 rounded-lg px-3 py-1.5 text-xs text-white placeholder-white/30 focus:outline-none focus:border-[#FF6B00]" />
+                                    <button onClick={() => saveKey(row.key)} disabled={saving || !editValue}
+                                      className="text-xs bg-[#FF6B00] text-white px-3 py-1.5 rounded-lg disabled:opacity-50">{saving ? '...' : 'Save'}</button>
+                                    <button onClick={() => { setEditingKey(null); setEditValue('') }}
+                                      className="text-xs bg-white/10 text-white/50 px-2 py-1.5 rounded-lg">✕</button>
+                                  </div>
+                                ) : (
+                                  <p className="text-xs font-mono text-white/30 mt-0.5 truncate">{row.value}</p>
+                                )}
+                              </div>
+                              {editingKey !== row.key && (
+                                <div className="flex gap-1.5 flex-shrink-0">
+                                  <button onClick={async () => {
+                                    setTestingKey(row.key)
+                                    const r = await authFetch('/api/admin/keys-health')
+                                    if (r.ok) {
+                                      const d = await r.json()
+                                      const match = (d.results ?? []).find((res: {name: string; ok: boolean; error?: string}) => res.name === healthKey)
+                                      if (match) setKeyTestResults(prev => ({ ...prev, [healthKey]: { ok: match.ok, error: match.error } }))
+                                    }
+                                    setTestingKey(null)
+                                  }} className="text-xs bg-white/5 border border-white/10 px-2 py-1.5 rounded-lg hover:bg-white/10 text-white/40">
+                                    🔍
+                                  </button>
+                                  <button onClick={() => { setEditingKey(row.key); setEditValue('') }}
+                                    className="text-xs bg-white/10 text-white/60 px-2 py-1.5 rounded-lg hover:bg-white/20">Edit</button>
+                                  <button onClick={() => clearKey(row.key)}
+                                    className="text-xs bg-red-500/10 text-red-400/70 px-2 py-1.5 rounded-lg hover:bg-red-500/20">✕</button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                      {/* Add new key inline */}
+                      {addingKey === nextKey && (
+                        <div className="bg-[#FF6B00]/5 border border-[#FF6B00]/20 rounded-xl p-3">
+                          <p className="text-xs text-white/40 mb-2 font-mono">{nextKey}</p>
+                          <div className="flex gap-2">
+                            <input type="password" value={newKeyValue} onChange={e => setNewKeyValue(e.target.value)}
+                              placeholder={`Paste ${label} API key...`} autoFocus
+                              className="flex-1 bg-white/5 border border-white/20 rounded-lg px-3 py-1.5 text-xs text-white placeholder-white/30 focus:outline-none focus:border-[#FF6B00]" />
+                            <button onClick={async () => {
+                              if (!newKeyValue) return
+                              await saveKey(nextKey)
+                              setAddingKey(null); setNewKeyValue('')
+                            }} disabled={saving || !newKeyValue}
+                              className="text-xs bg-[#FF6B00] text-white px-3 py-1.5 rounded-lg disabled:opacity-50">{saving ? '...' : 'Save'}</button>
+                            <button onClick={() => { setAddingKey(null); setNewKeyValue('') }}
+                              className="text-xs bg-white/10 text-white/50 px-2 py-1.5 rounded-lg">✕</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
             </div>
 
-            {keysHealth && (
-              <div className={`border rounded-xl p-4 ${(keysHealth.working as number) === 0 ? 'bg-red-500/10 border-red-500/20' : (keysHealth.working as number) < (keysHealth.total as number) ? 'bg-yellow-500/10 border-yellow-500/20' : 'bg-green-500/10 border-green-500/20'}`}>
-                <div className="flex items-center justify-between mb-3">
-                  <p className="text-sm font-medium">{keysHealth.working as number}/{keysHealth.total as number} keys working</p>
-                  {(keysHealth.working as number) === 0 && <span className="text-xs text-red-400">⚠️ No working keys — AI will fail</span>}
-                  {(keysHealth.working as number) > 0 && (keysHealth.working as number) < (keysHealth.total as number) && <span className="text-xs text-yellow-400">⚠️ Some keys rate limited</span>}
-                </div>
-                <div className="space-y-1.5 mb-3">
-                  {((keysHealth.results as {name:string;masked:string;ok:boolean;error?:string;model?:string}[]) ?? []).map((r, i) => (
-                    <div key={i} className="flex items-center justify-between text-xs bg-black/20 rounded-lg px-3 py-2">
-                      <span className="text-white/60">{r.name} <span className="text-white/30 font-mono">{r.masked}</span></span>
-                      {r.ok
-                        ? <span className="text-green-400">✓ Working{r.model ? ` — ${r.model}` : ''}</span>
-                        : <span className="text-red-400">✗ {r.error}</span>
-                      }
-                    </div>
-                  ))}
-                </div>
-                <p className={`text-xs font-mono ${String(keysHealth.modal_worker_url).startsWith('✓') ? 'text-green-400' : 'text-red-400'}`}>
-                  {keysHealth.modal_worker_url as string}
-                </p>
-              </div>
-            )}
-            {Object.entries(configGroups).map(([group, rows]) => (
+            {/* Other config keys (non-AI) */}
+            {Object.entries(configGroups).filter(([g]) => !['AI', 'ai'].includes(g)).map(([group, rows]) => (
               <div key={group}>
                 <h3 className="text-xs font-medium text-white/40 uppercase tracking-wider mb-2">{group}</h3>
                 <div className="space-y-2">
-                  {rows.map(row => (
+                  {rows.filter(r => !r.key.includes('GEMINI') && !r.key.includes('GROQ') && !r.key.includes('OPENROUTER')).map(row => (
                     <div key={row.key} className="bg-white/5 border border-white/10 rounded-xl p-4">
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1 min-w-0">
