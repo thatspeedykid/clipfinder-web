@@ -61,17 +61,43 @@ export async function DELETE(req: NextRequest) {
   const { jobId } = body as { jobId?: string }
 
   if (jobId) {
-    // Delete single job + its clips
-    const { data: clips } = await supabase.from('clips').select('id, storage_path').eq('job_id', jobId).eq('user_id', user.id)
-    await Promise.all((clips ?? []).filter(c => c.storage_path).map(c => r2Delete(c.storage_path!)))
-    await supabase.from('clips').delete().eq('job_id', jobId).eq('user_id', user.id)
+    // Verify job belongs to user first
+    const { data: job } = await supabase.from('jobs').select('id').eq('id', jobId).eq('user_id', user.id).single()
+    if (!job) return NextResponse.json({ error: 'Job not found' }, { status: 404 })
+
+    // Get ALL clips for this job (don't filter by user_id - worker may set different user_id on combined clips)
+    const { data: clips } = await supabase.from('clips').select('id, storage_path').eq('job_id', jobId)
+    console.log(`[history] deleting job ${jobId}: ${clips?.length ?? 0} clips`)
+
+    // Delete from R2
+    const storagePaths = (clips ?? []).filter(c => c.storage_path).map(c => c.storage_path!)
+    console.log(`[history] R2 paths to delete:`, storagePaths)
+    await Promise.all(storagePaths.map(p => r2Delete(p)))
+
+    // Delete from DB
+    await supabase.from('clips').delete().eq('job_id', jobId)
     await supabase.from('jobs').delete().eq('id', jobId).eq('user_id', user.id)
     return NextResponse.json({ success: true, deleted: clips?.length ?? 0 })
   }
 
   // Delete ALL jobs + clips for this user
-  const { data: allClips } = await supabase.from('clips').select('id, storage_path').eq('user_id', user.id)
-  await Promise.all((allClips ?? []).filter(c => c.storage_path).map(c => r2Delete(c.storage_path!)))
+  // Get all job IDs for this user first
+  const { data: userJobs } = await supabase.from('jobs').select('id').eq('user_id', user.id)
+  const jobIds = (userJobs ?? []).map(j => j.id)
+
+  // Get ALL clips for these jobs (catches combined clips with different user_id)
+  let allClips: {id: string, storage_path?: string}[] = []
+  if (jobIds.length > 0) {
+    const { data } = await supabase.from('clips').select('id, storage_path').in('job_id', jobIds)
+    allClips = data ?? []
+  }
+  // Also get any clips directly tied to user
+  const { data: directClips } = await supabase.from('clips').select('id, storage_path').eq('user_id', user.id)
+  const allToDelete = [...allClips, ...(directClips ?? [])].filter((c, i, arr) => arr.findIndex(x => x.id === c.id) === i)
+
+  console.log(`[history] clearing all: ${allToDelete.length} clips`)
+  await Promise.all(allToDelete.filter(c => c.storage_path).map(c => r2Delete(c.storage_path!)))
+  if (jobIds.length > 0) await supabase.from('clips').delete().in('job_id', jobIds)
   await supabase.from('clips').delete().eq('user_id', user.id)
   await supabase.from('jobs').delete().eq('user_id', user.id)
 
