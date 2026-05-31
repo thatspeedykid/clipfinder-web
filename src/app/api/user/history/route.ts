@@ -10,14 +10,13 @@ async function r2Delete(storagePath: string): Promise<boolean> {
   const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY
   const bucket = process.env.R2_BUCKET_NAME ?? 'clipfinder-clips'
   if (!accountId || !accessKeyId || !secretAccessKey || !storagePath) {
-    console.log('[r2Delete] missing credentials, accountId:', !!accountId)
+    console.log('[r2Delete] missing credentials')
     return false
   }
   try {
     const crypto = require('crypto')
     const now = new Date()
-    const pad = (s: string) => s.replace(/[:\-]/g, '').replace(/\.\d{3}/, '').slice(0,15) + 'Z'
-    const date = pad(now.toISOString())
+    const date = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '').slice(0, 15) + 'Z'
     const dateShort = date.slice(0, 8)
     const host = `${accountId}.r2.cloudflarestorage.com`
     const path = `/${bucket}/${storagePath}`
@@ -31,15 +30,19 @@ async function r2Delete(storagePath: string): Promise<boolean> {
     const hmac = (key: Buffer | string, data: string) => crypto.createHmac('sha256', key).update(data).digest()
     const signingKey = hmac(hmac(hmac(hmac('AWS4' + secretAccessKey, dateShort), 'auto'), 's3'), 'aws4_request')
     const signature = crypto.createHmac('sha256', signingKey).update(stringToSign).digest('hex')
-    const authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`
     const url = `https://${host}${path}`
-    console.log('[r2Delete] deleting:', url.slice(0, 80))
     const res = await fetch(url, {
       method: 'DELETE',
-      headers: { 'Authorization': authorization, 'x-amz-date': date, 'x-amz-content-sha256': payloadHash, 'Host': host },
+      headers: {
+        Authorization: `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
+        'x-amz-date': date,
+        'x-amz-content-sha256': payloadHash,
+        Host: host,
+      },
     })
-    console.log('[r2Delete] status:', res.status, storagePath.slice(0, 40))
-    return res.ok || res.status === 204 || res.status === 404
+    const ok = res.ok || res.status === 204 || res.status === 404
+    console.log(`[r2Delete] ${ok ? '✓' : '✗'} ${res.status} ${storagePath.slice(0, 50)}`)
+    return ok
   } catch (e) {
     console.error('[r2Delete] error:', e)
     return false
