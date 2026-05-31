@@ -194,7 +194,7 @@ export async function POST(req: NextRequest) {
     }))
 
     const { error: insertError } = await supabase.from('clips').insert(clipRows)
-    if (insertError) throw insertError
+    if (insertError) throw new Error(`DB insert failed: ${insertError.message} (${insertError.code}) — ${insertError.details}`)
 
     // Fetch back with real Supabase UUIDs so the worker can update file_url after cutting
     const { data: insertedClips } = await supabase
@@ -214,7 +214,8 @@ export async function POST(req: NextRequest) {
 
   } catch (err) {
     console.error('[analyze] error:', err)
-    console.error('[analyze] error details:', JSON.stringify(err, Object.getOwnPropertyNames(err)))
-    return NextResponse.json({ error: 'Internal server error', details: String(err) }, { status: 500 })
+    const errMsg = err instanceof Error ? err.message : JSON.stringify(err)
+    console.error('[analyze] error:', errMsg)
+    return NextResponse.json({ error: 'Internal server error', details: errMsg }, { status: 500 })
   }
 }
