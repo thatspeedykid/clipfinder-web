@@ -598,49 +598,93 @@ export default function AdminPage() {
               })}
             </div>
 
-            {/* Other config keys (non-AI) */}
-            {Object.entries(configGroups).filter(([g]) => !['AI', 'ai'].includes(g)).map(([group, rows]) => (
-              <div key={group}>
-                <h3 className="text-xs font-medium text-white/40 uppercase tracking-wider mb-2">{group}</h3>
+            {/* All other config keys — grouped */}
+            {[
+              {
+                group: 'App URLs',
+                desc: 'Change these when you get a custom domain',
+                keys: [
+                  { key: 'NEXT_PUBLIC_APP_URL', label: 'App URL', hint: 'e.g. https://clipfinder.app', secret: false },
+                  { key: 'NEXT_PUBLIC_SUPABASE_URL', label: 'Supabase URL', hint: 'Your Supabase project URL', secret: false },
+                ]
+              },
+              {
+                group: 'Worker & Auth',
+                desc: 'Modal worker and security secrets',
+                keys: [
+                  { key: 'MODAL_WORKER_URL', label: 'Modal Worker URL', hint: 'https://yourname--clipfinder-worker-start.modal.run', secret: false },
+                  { key: 'WORKER_SECRET', label: 'Worker Secret', hint: 'Secret shared between Vercel and Modal', secret: true },
+                  { key: 'NEXT_PUBLIC_WORKER_SECRET', label: 'Worker Secret (Public)', hint: 'Same as Worker Secret', secret: true },
+                  { key: 'CRON_SECRET', label: 'Cron Secret', hint: 'Secret for daily cleanup cron job', secret: true },
+                ]
+              },
+              {
+                group: 'Database & Storage',
+                desc: 'Supabase and Cloudflare R2 credentials',
+                keys: [
+                  { key: 'SUPABASE_SERVICE_ROLE_KEY', label: 'Supabase Service Role Key', hint: 'From Supabase → Settings → API', secret: true },
+                  { key: 'R2_ACCOUNT_ID', label: 'R2 Account ID', hint: 'Cloudflare Account ID', secret: false },
+                  { key: 'R2_ACCESS_KEY_ID', label: 'R2 Access Key ID', hint: 'R2 API token access key', secret: true },
+                  { key: 'R2_SECRET_ACCESS_KEY', label: 'R2 Secret Access Key', hint: 'R2 API token secret', secret: true },
+                  { key: 'R2_BUCKET_NAME', label: 'R2 Bucket Name', hint: 'clipfinder-clips', secret: false },
+                  { key: 'R2_PUBLIC_URL', label: 'R2 Public URL', hint: 'https://pub-xxx.r2.dev', secret: false },
+                ]
+              },
+              {
+                group: 'Vercel Sync',
+                desc: 'Required for auto-syncing keys to Vercel',
+                keys: [
+                  { key: 'VERCEL_API_TOKEN', label: 'Vercel API Token', hint: 'From vercel.com/account/tokens', secret: true },
+                  { key: 'VERCEL_PROJECT_ID', label: 'Vercel Project ID', hint: 'prj_...', secret: false },
+                  { key: 'VERCEL_TEAM_ID', label: 'Vercel Team ID', hint: 'team_... (optional)', secret: false },
+                ]
+              },
+            ].map(({ group, desc, keys }) => (
+              <div key={group} className="bg-white/3 border border-white/10 rounded-2xl p-5">
+                <div className="mb-4">
+                  <h3 className="font-medium text-sm">{group}</h3>
+                  <p className="text-xs text-white/30 mt-0.5">{desc}</p>
+                </div>
                 <div className="space-y-2">
-                  {rows.filter(r => !r.key.includes('GEMINI') && !r.key.includes('GROQ') && !r.key.includes('OPENROUTER')).map(row => (
-                    <div key={row.key} className="bg-white/5 border border-white/10 rounded-xl p-4">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium">{row.label}</p>
-                          <p className="text-xs text-white/30 font-mono">{row.key}</p>
-                          {editingKey === row.key ? (
-                            <div className="flex gap-2 mt-2">
-                              <input type={row.is_secret ? 'password' : 'text'} value={editValue}
-                                onChange={e => setEditValue(e.target.value)}
-                                placeholder={`Enter ${row.label}...`} autoFocus
-                                className="flex-1 bg-white/5 border border-white/20 rounded-lg px-3 py-1.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-[#FF6B00]" />
-                              <button onClick={() => saveKey(row.key)} disabled={saving || !editValue}
-                                className="text-xs bg-[#FF6B00] text-white px-3 py-1.5 rounded-lg disabled:opacity-50">{saving ? '...' : 'Save'}</button>
-                              <button onClick={() => { setEditingKey(null); setEditValue('') }}
-                                className="text-xs bg-white/10 text-white/50 px-3 py-1.5 rounded-lg">Cancel</button>
-                            </div>
-                          ) : (
-                            <p className="text-xs font-mono text-white/50 mt-1 truncate">
-                              {row.hasValue ? row.value : <span className="text-red-400/70">Not set</span>}
-                            </p>
-                          )}
-                        </div>
-                        {editingKey !== row.key && (
-                          <div className="flex gap-2 flex-shrink-0">
-                            <button onClick={() => { setEditingKey(row.key); setEditValue('') }}
-                              className="text-xs bg-white/10 text-white/60 px-3 py-1.5 rounded-lg hover:bg-white/20">
-                              {row.hasValue ? 'Update' : 'Set'}
-                            </button>
-                            {row.hasValue && (
-                              <button onClick={() => clearKey(row.key)}
-                                className="text-xs bg-red-500/10 text-red-400 px-3 py-1.5 rounded-lg">Clear</button>
+                  {keys.map(({ key, label, hint, secret }) => {
+                    const dbRow = config.find(r => r.key === key)
+                    const hasValue = dbRow?.hasValue || !!process.env?.[key]
+                    return (
+                      <div key={key} className="bg-white/5 border border-white/10 rounded-xl p-3">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium">{label}</p>
+                            <p className="text-xs text-white/30 font-mono">{key}</p>
+                            <p className="text-xs text-white/20 mt-0.5">{hint}</p>
+                            {editingKey === key ? (
+                              <div className="flex gap-2 mt-2">
+                                <input type={secret ? 'password' : 'text'} value={editValue}
+                                  onChange={e => setEditValue(e.target.value)}
+                                  placeholder={hint} autoFocus
+                                  className="flex-1 bg-white/5 border border-white/20 rounded-lg px-3 py-1.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-[#FF6B00]" />
+                                <button onClick={() => saveKey(key)} disabled={saving || !editValue}
+                                  className="text-xs bg-[#FF6B00] text-white px-3 py-1.5 rounded-lg disabled:opacity-50">{saving ? '...' : 'Save'}</button>
+                                <button onClick={() => { setEditingKey(null); setEditValue('') }}
+                                  className="text-xs bg-white/10 text-white/50 px-2 py-1.5 rounded-lg">✕</button>
+                              </div>
+                            ) : (
+                              <p className="text-xs font-mono text-white/40 mt-1 truncate">
+                                {dbRow?.value ? dbRow.value : <span className="text-yellow-400/60">Set via Vercel</span>}
+                              </p>
                             )}
                           </div>
-                        )}
+                          {editingKey !== key && (
+                            <div className="flex gap-2 flex-shrink-0">
+                              <button onClick={() => { setEditingKey(key); setEditValue('') }}
+                                className="text-xs bg-white/10 text-white/60 px-3 py-1.5 rounded-lg hover:bg-white/20">
+                                {dbRow?.hasValue ? 'Update' : 'Set'}
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </div>
             ))}
