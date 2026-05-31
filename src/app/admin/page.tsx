@@ -554,11 +554,16 @@ export default function AdminPage() {
                                 <div className="flex gap-1.5 flex-shrink-0">
                                   <button onClick={async () => {
                                     setTestingKey(row.key)
+                                    // Test all keys and update all results at once
                                     const r = await authFetch('/api/admin/keys-health')
                                     if (r.ok) {
                                       const d = await r.json()
-                                      const match = (d.results ?? []).find((res: {name: string; ok: boolean; error?: string}) => res.name === healthKey)
-                                      if (match) setKeyTestResults(prev => ({ ...prev, [healthKey]: { ok: match.ok, error: match.error } }))
+                                      const newResults: Record<string, {ok: boolean, error?: string}> = {}
+                                      for (const res of (d.results ?? [])) {
+                                        newResults[res.name] = { ok: res.ok, error: res.error }
+                                      }
+                                      setKeyTestResults(newResults)
+                                      setKeysHealth(d)
                                     }
                                     setTestingKey(null)
                                   }} className="text-xs bg-white/5 border border-white/10 px-2 py-1.5 rounded-lg hover:bg-white/10 text-white/40">
