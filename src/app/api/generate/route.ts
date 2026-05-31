@@ -1,13 +1,10 @@
 // src/app/api/generate/route.ts
-// Post Studio — uses the real ClipFinder prompts from clipfinder_core.py
-// Generates 3 options per platform, all same tone different angles
-
+// Uses actual ClipFinder prompts from clipfinder_core.py
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
 
 export const maxDuration = 30
 
-// ── Tone definitions — direct port from clipfinder_core.py TWEET_TONE_PROMPTS ──
 const TONE_PROMPTS: Record<string, string> = {
   drama: '🔥 DRAMA ACCOUNT — Tea spiller energy. Shocking, pointed, like a real streaming drama page. Use emojis strategically. Pull receipts.',
   tea: '☕ TEA MODE — Calm but devastating. Matter-of-fact delivery that makes the drama hit harder. "So apparently..." energy. Understated.',
@@ -23,262 +20,237 @@ const TONE_PROMPTS: Record<string, string> = {
 
 Rules: Each line max 12 words. 1-2 emojis at END of each line. Build tension line by line.
 Stay factual to the transcript — just massively dramatize real events.
-Never mean-spirited toward the person — make them the legendary main character.
+Never mean-spirited — make them the legendary main character.
 All 3 options follow this same format but cover DIFFERENT angles of the same story.
-Hashtags on a separate final line.`,
+Hashtags on a separate final line.`
 }
 
-// ── Platform-specific max chars ──────────────────────────────────────────────
-const PLATFORM_LIMITS: Record<string, number> = {
-  twitter: 280,
-  instagram: 2200,
-  tiktok: 2200,
-  youtube: 500,
+const PLATFORM_FORMATS: Record<string, string> = {
+  twitter: `PLATFORM: Twitter/X (280 char limit per option)
+- Max 280 chars including hashtags
+- 3-5 hashtags at the end
+- No links`,
+
+  instagram: `PLATFORM: Instagram (caption, up to 2200 chars)
+- Write a longer engaging caption that tells the full story
+- First 125 chars are shown before "more" — hook hard
+- Line breaks every 1-2 sentences
+- 5-10 hashtags at the very END after a blank line
+- End with a CTA: "Save this" / "Tag someone" / "Follow for more"`,
+
+  tiktok: `PLATFORM: TikTok (150 char limit)
+- MAX 150 chars total
+- 3-5 trending hashtags
+- Start with hook word: "POV:" / "Wait for it" / "They really said"
+- Punchy, no full sentences needed`,
+
+  youtube: `PLATFORM: YouTube Shorts
+- Write a TITLE (60 chars max) and DESCRIPTION (150 chars) separately
+- Title: front-load keyword, ALL CAPS for key words, reaction-style
+- Format each option as:
+TITLE: [title here]
+DESC: [description + #Shorts #StreamerMoments]`
 }
 
-// ── Main prompt — port of TWEET_PROMPT from clipfinder_core.py ───────────────
-function buildPrompt(clip: ClipData, tone: string, platform: string): string {
-  const limit = PLATFORM_LIMITS[platform] ?? 280
-  const platformNote = platform === 'twitter'
-    ? `Max ${limit} chars per option.`
-    : platform === 'instagram'
-    ? `Instagram caption. Hook in first line. 8-12 hashtags on last line. Max ${limit} chars.`
-    : platform === 'tiktok'
-    ? `TikTok caption. Punchy, lowercase is fine. 3-5 hashtags. Max 150 chars.`
-    : `YouTube Shorts description. First line is SEO hook. Add call to action. Max ${limit} chars.`
+function buildPrompt(
+  transcript: string,
+  tone: string,
+  platform: string,
+  streamerName: string,
+  clipTitle: string,
+  customContext: string
+): string {
+  const context = [
+    streamerName ? `Streamer/Creator: ${streamerName}` : '',
+    clipTitle ? `Clip title: ${clipTitle}` : '',
+    customContext ? `Extra context: ${customContext}` : '',
+  ].filter(Boolean).join('\n')
 
-  return `You are a social media writer for @MarsScumbags, a streaming drama/clip channel.
+  const toneText = TONE_PROMPTS[tone] ?? TONE_PROMPTS.drama
+  const platformText = PLATFORM_FORMATS[platform] ?? PLATFORM_FORMATS.twitter
+
+  return `You are a social media writer for a streaming drama/clip channel.
 Read the transcript carefully. Identify WHO is involved, WHAT happened, and the most shocking/quotable moment.
 
 == PEOPLE & CONTEXT ==
-Clip title: ${clip.title}
-Summary: ${clip.summary}
-Speaker: ${clip.speaker || 'unknown'}
-${clip.transcript_excerpt ? `\nTranscript excerpt:\n${clip.transcript_excerpt}` : ''}
+${context || 'No additional context provided'}
+
+== TRANSCRIPT ==
+${transcript.slice(0, 3000)}
 
 == TONE ==
-${TONE_PROMPTS[tone] ?? TONE_PROMPTS.drama}
+${toneText}
 
-== PLATFORM ==
-${platformNote}
+== ${platformText}
 
 == YOUR JOB ==
-Write 3 posts ALL in the same tone above. Each post covers the same event but from a DIFFERENT ANGLE:
+Write 3 options ALL in the same tone. Each covers the same event from a DIFFERENT ANGLE:
 
 OPTION 1 — HOT TAKE
-Your punchy opinion or reaction to what happened. Lead with the most shocking element.
-Structure: Strong opener (can be all caps or shocking statement) → context sentence → spicy take or quote → hashtags
-Must reference a SPECIFIC moment or quote from the transcript.
+Your punchy opinion or reaction. Lead with the most shocking element.
+Strong opener → context → spicy take or quote → hashtags
 
-OPTION 2 — PULL QUOTE
-Lead with an actual direct quote or close paraphrase from the transcript (in quotes), then react to it.
-Structure: "Quote from transcript" → your reaction/commentary → hashtags
-The quote must be real and specific — not made up.
+OPTION 2 — PULL QUOTE  
+Lead with an actual direct quote from the transcript (in quotes), then react.
+"Quote from transcript" → your reaction → hashtags
+The quote must be REAL and SPECIFIC — not made up.
 
 OPTION 3 — ANNOUNCEMENT HOOK
-Frame it like breaking news or a must-see moment. Make people feel like they NEED to watch the clip.
-Structure: Hook that creates urgency or curiosity → what happened → call to action or cliffhanger → hashtags
-No clickbait that doesn't deliver — be specific about what happens.
-
-== OUTPUT FORMAT ==
-Write EXACTLY this — no preamble, no labels other than OPTION 1/2/3:
-
-OPTION 1
-[post text]
-
-OPTION 2
-[post text]
-
-OPTION 3
-[post text]
+Frame it like breaking news. Make people feel they NEED to watch.
+Hook that creates urgency → what happened → cliffhanger → hashtags
 
 == HASHTAG RULES ==
-- Use ACTUAL NAMES from the transcript/context ONLY — never invent or assume names not mentioned
+- Use ACTUAL NAMES from transcript/context ONLY — never invent names not mentioned
 - Use platform only if relevant (#Kick #Twitch #YouTube)
 - Use drama type if it fits (#Exposed #Drama #Beef #Leaked #Scandal)
-- NEVER use #gaming #gamingscandal #gamer #streamer unless literally about gameplay
-- Each option gets its OWN hashtags matching what THAT post says
+- NEVER use #gaming #gamer #streamer unless literally about gameplay
+- Each option gets its OWN hashtags
 - 3-5 hashtags max per option
 
+== OUTPUT FORMAT ==
+Write EXACTLY this — no preamble, no extra labels:
+
+OPTION 1
+[content]
+
+OPTION 2
+[content]
+
+OPTION 3
+[content]
+
 == RULES ==
-- All 3 options MUST be in the same tone — do NOT switch styles between options
-- Each option must feel different in angle and structure but same energy
+- All 3 options MUST be in the same tone
 - Use REAL quotes and REAL moments — never make things up
+- Reference ${streamerName || 'the streamer'} by name throughout
 - No preamble before OPTION 1 — start writing immediately`
 }
 
-// ── Hook line prompt ──────────────────────────────────────────────────────────
-function buildHookPrompt(clip: ClipData): string {
-  return `You are an expert at writing viral hooks for social media clips.
-Pull the single most quotable, shocking, or funny moment from this clip as a standalone hook line.
+async function callAI(prompt: string): Promise<string> {
+  const geminiKey = process.env.GEMINI_API_KEY
+  const groqKey = process.env.GROQ_API_KEY
 
-Clip title: ${clip.title}
-Summary: ${clip.summary}
-${clip.transcript_excerpt ? `Transcript excerpt:\n${clip.transcript_excerpt}` : ''}
+  const calls: Promise<string>[] = []
 
-RULES:
-- 1 sentence max, under 100 characters
-- Must be something someone actually said OR a punchy description of the moment
-- If it's a direct quote from the transcript, wrap it in quotation marks
-- No emojis, no hashtags — just the raw line
+  if (geminiKey) {
+    calls.push(
+      fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.8, maxOutputTokens: 3000 }
+        }),
+        signal: AbortSignal.timeout(25000),
+      }).then(r => r.json()).then(d => d.candidates?.[0]?.content?.parts?.[0]?.text ?? '')
+    )
+  }
 
-Return ONLY the hook line. Nothing else.`
+  if (groqKey) {
+    calls.push(
+      fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${groqKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 3000, temperature: 0.8,
+        }),
+        signal: AbortSignal.timeout(25000),
+      }).then(r => r.json()).then(d => d.choices?.[0]?.message?.content ?? '')
+    )
+  }
+
+  if (calls.length === 0) throw new Error('No AI API keys configured')
+
+  const results = await Promise.allSettled(calls)
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value?.trim()) return r.value
+  }
+  throw new Error('All AI calls failed')
 }
 
-type ClipData = {
-  title: string
-  summary: string
-  speaker?: string
-  transcript_excerpt?: string
-}
-
-// ── Parse the OPTION 1/2/3 format from AI response ───────────────────────────
 function parseOptions(raw: string): string[] {
   const options: string[] = []
-  const parts = raw.split(/^OPTION \d+\s*$/m).filter(p => p.trim())
-  for (const part of parts) {
-    const cleaned = part.trim()
-    if (cleaned) options.push(cleaned)
+  const blocks = raw.split(/\bOPTION\s+[123]\b/i).map(s => s.trim()).filter(Boolean)
+  for (const block of blocks.slice(0, 3)) {
+    options.push(block.trim())
   }
-  // Fallback: if parsing fails, return the whole thing as one option
-  if (options.length === 0 && raw.trim()) {
-    return [raw.trim()]
-  }
+  while (options.length < 3) options.push(options[0] ?? raw)
   return options.slice(0, 3)
 }
 
-async function callGroq(prompt: string): Promise<string> {
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 800,
-      temperature: 0.8,
-    }),
-  })
-  if (!res.ok) throw new Error(`Groq error: ${res.status}`)
-  const data = await res.json()
-  return data.choices?.[0]?.message?.content?.trim() ?? ''
+function extractHookLine(transcript: string): string {
+  if (!transcript) return ''
+  const sentences = transcript.split(/[.!?]/).map(s => s.trim()).filter(s => s.length > 15 && s.length < 120)
+  return sentences[0] ?? ''
 }
 
-async function callGemini(prompt: string): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.8, maxOutputTokens: 800 },
-    }),
-  })
-  if (!res.ok) throw new Error(`Gemini error: ${res.status}`)
-  const data = await res.json()
-  return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? ''
-}
-
-async function generate(prompt: string): Promise<string> {
-  const [geminiResult, groqResult] = await Promise.allSettled([
-    callGemini(prompt),
-    callGroq(prompt),
-  ])
-  if (geminiResult.status === 'fulfilled' && geminiResult.value) return geminiResult.value
-  if (groqResult.status === 'fulfilled' && groqResult.value) return groqResult.value
-  throw new Error('All AI providers failed')
+function extractStreamerFromUrl(url: string): string {
+  try {
+    const u = new URL(url)
+    if (u.hostname.includes('kick.com')) {
+      const parts = u.pathname.split('/').filter(Boolean)
+      return parts[0] && parts[0] !== 'clips' ? parts[0] : ''
+    }
+    if (u.hostname.includes('twitter.com') || u.hostname.includes('x.com')) {
+      return u.pathname.split('/').filter(Boolean)[0]?.replace('@', '') ?? ''
+    }
+    if (u.hostname.includes('tiktok.com')) {
+      return u.pathname.split('/').filter(Boolean)[0]?.replace('@', '') ?? ''
+    }
+    if (u.hostname.includes('twitch.tv')) {
+      return u.pathname.split('/').filter(Boolean)[0] ?? ''
+    }
+  } catch {}
+  return ''
 }
 
 export async function POST(req: NextRequest) {
   try {
     const supabase = createAdminClient()
-    const authHeader = req.headers.get('authorization')
-    if (!authHeader) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    const token = authHeader.replace('Bearer ', '')
-    const { data: { user }, error } = await supabase.auth.getUser(token)
-    if (error || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const token = req.headers.get('authorization')?.replace('Bearer ', '')
+    if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const { data: { user } } = await supabase.auth.getUser(token)
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const body = await req.json()
-    const { clipId, platform = 'twitter', tone = 'drama' } = body
-    if (!clipId) return NextResponse.json({ error: 'clipId required' }, { status: 400 })
+    const { clipId, platform = 'twitter', tone = 'drama', streamerName: bodyStreamer, customContext = '', platforms } = body
 
-    // Validate tone and platform
-    if (!TONE_PROMPTS[tone]) return NextResponse.json({ error: `Unknown tone: ${tone}` }, { status: 400 })
-    if (!PLATFORM_LIMITS[platform]) return NextResponse.json({ error: `Unknown platform: ${platform}` }, { status: 400 })
+    // Fetch clip + transcript
+    const { data: clip } = await supabase.from('clips').select('id, title, summary, job_id').eq('id', clipId).single()
 
-    // Get clip data
-    const { data: clip } = await supabase
-      .from('clips')
-      .select('title, summary, reason, speaker, start_ts, end_ts, job_id')
-      .eq('id', clipId)
-      .eq('user_id', user.id)
-      .single()
+    let transcript = clip?.summary ?? ''
+    let sourceUrl = ''
+    let videoTitle = clip?.title ?? ''
 
-    if (!clip) return NextResponse.json({ error: 'Clip not found' }, { status: 404 })
-
-    // Get transcript excerpt for this clip's time range
-    const { data: job } = await supabase
-      .from('jobs')
-      .select('transcript')
-      .eq('id', clip.job_id)
-      .single()
-
-    let transcriptExcerpt = ''
-    if (job?.transcript) {
-      const lines = job.transcript.split('\n')
-      const startSec = tsToSeconds(clip.start_ts)
-      const endSec = tsToSeconds(clip.end_ts)
-      const relevant = lines.filter((line: string) => {
-        const match = line.match(/\[(\d{2}):(\d{2}):(\d{2})/)
-        if (!match) return false
-        const lineSec = parseInt(match[1]) * 3600 + parseInt(match[2]) * 60 + parseInt(match[3])
-        return lineSec >= startSec && lineSec <= endSec
-      })
-      transcriptExcerpt = relevant
-        .slice(0, 30)
-        .join('\n')
-        .replace(/\[\d{2}:\d{2}:\d{2}\.\d{2}\] /g, '')
+    if (clip?.job_id) {
+      const { data: job } = await supabase.from('jobs').select('source_url, video_title, transcript').eq('id', clip.job_id).single()
+      sourceUrl = job?.source_url ?? ''
+      if (job?.transcript) transcript = job.transcript
+      if (job?.video_title) videoTitle = job.video_title
     }
 
-    const clipData: ClipData = {
-      title: clip.title,
-      summary: clip.summary,
-      speaker: clip.speaker,
-      transcript_excerpt: transcriptExcerpt,
+    const streamerName = bodyStreamer || extractStreamerFromUrl(sourceUrl) || ''
+    const hookLine = extractHookLine(transcript)
+
+    const targetPlatforms: string[] = platforms ?? [platform]
+    const results: Record<string, { options: string[]; hook_line: string }> = {}
+
+    await Promise.all(targetPlatforms.map(async (p) => {
+      const prompt = buildPrompt(transcript || videoTitle, tone, p, streamerName, videoTitle, customContext)
+      const raw = await callAI(prompt)
+      const options = parseOptions(raw)
+      results[p] = { options, hook_line: hookLine }
+    }))
+
+    if (targetPlatforms.length === 1) {
+      return NextResponse.json({ ...results[targetPlatforms[0]], streamer: streamerName })
     }
-
-    // Run hook + main generation in parallel
-    const [hookResult, mainResult] = await Promise.allSettled([
-      generate(buildHookPrompt(clipData)),
-      generate(buildPrompt(clipData, tone, platform)),
-    ])
-
-    const hookLine = hookResult.status === 'fulfilled' ? hookResult.value : ''
-    const mainRaw = mainResult.status === 'fulfilled' ? mainResult.value : ''
-
-    if (!mainRaw) {
-      return NextResponse.json({ error: 'Generation failed' }, { status: 500 })
-    }
-
-    const options = parseOptions(mainRaw)
-
-    return NextResponse.json({
-      success: true,
-      platform,
-      tone,
-      options,        // array of 3 post options
-      hook_line: hookLine,
-      raw: mainRaw,  // full raw output for debugging
-    })
+    return NextResponse.json({ platforms: results, streamer: streamerName })
 
   } catch (err) {
     console.error('[generate] error:', err)
-    return NextResponse.json({ error: 'Generation failed' }, { status: 500 })
+    return NextResponse.json({ error: String(err) }, { status: 500 })
   }
-}
-
-function tsToSeconds(ts: string): number {
-  const parts = ts.split(':').map(Number)
-  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2]
-  if (parts.length === 2) return parts[0] * 60 + parts[1]
-  return parts[0]
 }
