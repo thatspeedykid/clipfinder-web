@@ -301,8 +301,9 @@ def cut_clip_section(url, start_ts, end_ts, output_path, cookies_file=None, sour
             "-ss", str(start_sec),      # seek BEFORE input = fast
             "-i", direct_url,
             "-t", str(duration),
-            "-c", "copy",  # stream copy for HLS/direct CDN URLs
-            "-movflags", "+faststart",
+            "-vf", "scale=-2:1080",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
             str(output_path), "-y", "-loglevel", "error"
         ], capture_output=True, text=True, timeout=180)
         if result.returncode != 0:
@@ -416,13 +417,9 @@ def _upload_clip_to_storage(sb, clip_path, user_id, job_id, clip_num, clip_id, s
             ExtraArgs={"ContentType": "video/mp4"}
         )
 
-        # Generate pre-signed URL valid until expiry
-        sign_seconds = int((expires - datetime.utcnow()).total_seconds())
-        file_url = s3.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": bucket, "Key": storage_path},
-            ExpiresIn=sign_seconds,
-        )
+        # Use public R2 URL (bucket has public access enabled)
+        public_base = os.environ.get("R2_PUBLIC_URL", "").rstrip("/")
+        file_url = f"{public_base}/{storage_path}" if public_base else ""
 
         if clip_id:
             sb.table("clips").update({
@@ -446,15 +443,15 @@ def _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, s
     """Cut clips at given timestamps from HLS URL and upload."""
     # Insert clip rows
     clip_rows = []
-    for ec in extension_clips:
+    for idx_ec, ec in enumerate(extension_clips):
         start = ec.get("start", "00:00:00")
         end = ec.get("end", "00:01:00")
         clip_rows.append({
             "job_id": job_id, "user_id": user_id,
-            "title": ec.get("label") or f"{streamer_name.capitalize() if streamer_name else 'Extension'} clip {i+1}",
+            "title": f"{streamer_name.capitalize() if streamer_name else 'Extension'} — Clip {idx_ec+1}",
             "summary": f"Clipped via browser extension{(' from ' + streamer_name) if streamer_name else ''}",
             "start_ts": start, "end_ts": end,
-            "duration_sec": int(ts_to_seconds(end) - ts_to_seconds(start)), "score": 80,
+            "duration_sec": int(round(ts_to_seconds(end) - ts_to_seconds(start))), "score": 80,
         })
     sb.table("clips").insert(clip_rows).execute()
     db_clips = sb.table("clips").select("id, start_ts").eq("job_id", job_id).execute()
@@ -472,9 +469,10 @@ def _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, s
         result = subprocess.run([
             "ffmpeg", "-ss", str(ts_to_seconds(start_ts)), "-i", source_url,
             "-t", str(duration),
-            "-vf", "scale=-2:720",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-            "-c:a", "aac", "-b:a", "96k",
+            "-vf", "scale=-2:1080",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
+            "-async", "1", "-vsync", "1",
             "-movflags", "+faststart",
             str(clip_path), "-y", "-loglevel", "error"
         ], capture_output=True, text=True, timeout=120)
@@ -501,9 +499,10 @@ def _upload_clips_from_hls(sb, tmp, source_url, clips_data, clip_id_map, job_id,
         result = subprocess.run([
             "ffmpeg", "-ss", str(start_sec), "-i", source_url,
             "-t", str(duration),
-            "-vf", "scale=-2:720",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-            "-c:a", "aac", "-b:a", "96k",
+            "-vf", "scale=-2:1080",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
+            "-async", "1", "-vsync", "1",
             "-movflags", "+faststart",
             str(clip_path), "-y", "-loglevel", "error"
         ], capture_output=True, text=True, timeout=120)
@@ -582,11 +581,12 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
                 full_cut = subprocess.run([
                     "ffmpeg", "-i", source_url,
                     "-t", str(seg_duration_capped),
-                    "-vf", "scale=-2:720",
-                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-                    "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart",
+                    "-vf", "scale=-2:1080",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                    "-c:a", "aac", "-b:a", "128k",
+                    "-movflags", "+faststart",
                     str(full_clip_path), "-y", "-loglevel", "error"
-                ], capture_output=True, text=True, timeout=180)
+                ], capture_output=True, text=True, timeout=360)
 
                 if full_cut.returncode == 0 and full_clip_path.exists():
                     prefix = streamer_name.capitalize() if streamer_name else "Extension"
@@ -914,10 +914,8 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
                     continue
                 s3.upload_file(str(clip_path), bucket, storage_path,
                     ExtraArgs={"ContentType": "video/mp4"})
-                sign_seconds = int((expires - datetime.utcnow()).total_seconds())
-                file_url = s3.generate_presigned_url("get_object",
-                    Params={"Bucket": bucket, "Key": storage_path},
-                    ExpiresIn=sign_seconds)
+                public_base = os.environ.get("R2_PUBLIC_URL", "").rstrip("/")
+                file_url = f"{public_base}/{storage_path}" if public_base else ""
 
                 # Update clip record — use the real Supabase UUID from our map
                 clip_id = clip_id_map.get(start_ts, "")

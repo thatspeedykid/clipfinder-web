@@ -653,6 +653,16 @@ export default function AdminPage() {
                 }} className="text-xs bg-red-900/20 text-red-500 border border-red-900/30 px-3 py-1.5 rounded-lg hover:bg-red-900/30">
                   💥 Purge ALL
                 </button>
+                <button onClick={async () => {
+                  if (!confirm('NUKE ALL clip records from DB? Cannot be undone.')) return
+                  const r = await authFetch('/api/admin/clips/nuke', { method: 'DELETE' })
+                  const d = await r.json()
+                  if (!r.ok || d.error) { logError(`Nuke failed: ${d.error ?? r.status}`); toast('Nuke failed') }
+                  else { toast(`Nuked ${d.deleted} clip records`) }
+                  loadClips()
+                }} className="text-xs bg-red-950/40 text-red-600 border border-red-950/50 px-3 py-1.5 rounded-lg hover:bg-red-950/60">
+                  ☢️ Nuke DB
+                </button>
               </div>
             </div>
 
