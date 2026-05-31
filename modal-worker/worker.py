@@ -394,7 +394,11 @@ def _ext_cut_and_upload(sb, tmp, source_url, extension_clips, job_id, user_id, s
         # For HLS streams: URL is already at right position, use start_sec as offset within segment
         result = subprocess.run([
             "ffmpeg", "-ss", str(ts_to_seconds(start_ts)), "-i", source_url,
-            "-t", str(duration), "-c", "copy", "-movflags", "+faststart",
+            "-t", str(duration),
+            "-vf", "scale=-2:720",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-c:a", "aac", "-b:a", "64k",
+            "-movflags", "+faststart",
             str(clip_path), "-y", "-loglevel", "error"
         ], capture_output=True, text=True, timeout=120)
         if result.returncode == 0 and clip_path.exists():
@@ -419,7 +423,11 @@ def _upload_clips_from_hls(sb, tmp, source_url, clips_data, clip_id_map, job_id,
         print(f"[extension] sub-clip {i+1}: {start_ts} → {end_ts} ({duration:.0f}s)")
         result = subprocess.run([
             "ffmpeg", "-ss", str(start_sec), "-i", source_url,
-            "-t", str(duration), "-c", "copy", "-movflags", "+faststart",
+            "-t", str(duration),
+            "-vf", "scale=-2:720",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-c:a", "aac", "-b:a", "64k",
+            "-movflags", "+faststart",
             str(clip_path), "-y", "-loglevel", "error"
         ], capture_output=True, text=True, timeout=120)
         if result.returncode == 0 and clip_path.exists():
