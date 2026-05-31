@@ -1,6 +1,19 @@
+'use client'
 import Link from 'next/link'
+import { useEffect } from 'react'
+import { createClient } from '@/lib/supabase/client'
+import { useRouter } from 'next/navigation'
 
 export default function LandingPage() {
+  const router = useRouter()
+  const supabase = createClient()
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) router.replace('/dashboard')
+    })
+  }, [])
+
   return (
     <main className="min-h-screen flex flex-col bg-[#0f0f0f] text-white">
 
