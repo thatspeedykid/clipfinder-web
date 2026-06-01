@@ -1,134 +1,181 @@
 // src/app/api/generate/route.ts
-// Uses actual ClipFinder prompts from clipfinder_core.py
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
 
-export const maxDuration = 30
+export const maxDuration = 45
 
+// ─── Tone system prompts ──────────────────────────────────────────────────────
 const TONE_PROMPTS: Record<string, string> = {
-  drama: '🔥 DRAMA ACCOUNT — Tea spiller energy. Shocking, pointed, like a real streaming drama page. Use emojis strategically. Pull receipts.',
-  tea: '☕ TEA MODE — Calm but devastating. Matter-of-fact delivery that makes the drama hit harder. "So apparently..." energy. Understated.',
-  breaking: '📰 BREAKING NEWS — Urgent, journalistic. "BREAKING:" opener. Treat it like actual news. Serious tone, facts first.',
-  hype: '💥 HYPE MODE — Celebrate the moment. Positive energy, get people excited to watch. Use energy words. Make it feel unmissable.',
-  exaggerate: `🤯 EXAGGERATE MODE — Write a dramatic multi-line story that builds line by line. Use this EXACT format:
+  drama: `TONE: Drama/Tea Account (2026 style)
+You are a streaming drama account with 500k+ followers. Your posts feel like insider gossip from someone who was IN the room.
+- Lead with the most unhinged moment — no warmup
+- Write like you're telling your mutuals, not writing a press release
+- Use 1-2 emojis MAX — placed for impact, not decoration
+- No "wait till you see this" filler. Just drop the heat.
+- Make the person sound iconic, not evil`,
 
-🚨 [SHOCKING HEADLINE IN CAPS — name the person and the situation] 😳
-[Setup line — what the secret or situation was] 👀
-[Escalation — what triggered it or made it worse] 💔
-[Twist — how things shifted or got more chaotic] 💸🔥
-[Punchline — how wild it ended up] ⚡
+  tea: `TONE: Tea/Soft Expose (2026 style)
+Calm, devastatingly factual. The most dangerous posts are the ones that sound unbothered.
+- Open with a cold fact, no emotion
+- "So apparently" / "Turns out" / "Friendly reminder that" energy
+- Build the story like a court case — evidence first, reaction second
+- 1 emoji max, only if it adds irony
+- End on a cliffhanger or unanswered question`,
 
-Rules: Each line max 12 words. 1-2 emojis at END of each line. Build tension line by line.
-Stay factual to the transcript — just massively dramatize real events.
-Never mean-spirited — make them the legendary main character.
-All 3 options follow this same format but cover DIFFERENT angles of the same story.
-Hashtags on a separate final line.`
+  breaking: `TONE: Breaking News (2026 style)
+Write like a journalist covering a live stream beat. Factual but urgent.
+- Start with BREAKING: or 🚨 BREAKING:
+- Who, what, when — first sentence has all three
+- Quote the exact words if possible (only real quotes from transcript)
+- No speculation, no opinion — let the facts be wild
+- Hashtags that a journalist would use`,
+
+  hype: `TONE: Hype/Celebration (2026 style)
+Make the viewer feel like they MISSED something legendary. Pure positive chaos.
+- ALL CAPS for key moments (sparingly — 1-2 words max)
+- Exclamation energy but not cringe — think sports commentator
+- Focus on the reaction, the moment, the energy
+- Make them want to share it with their whole group chat
+- "This is the clip of the year" / "Nobody was ready" energy`,
+
+  exaggerate: `TONE: Exaggerate/Villain Arc (2026 style)
+Dramatize real events to absurd levels. The subject becomes a movie character.
+- Write in 4-5 short punchy lines that build like a story beat
+- Each line = 1 escalation. No line over 12 words.
+- Use 1 emoji at the END of each line (different each time)
+- The last line should be the wildest
+- Stay factual — just frame it cinematically`,
 }
 
+// ─── Platform formats ─────────────────────────────────────────────────────────
 const PLATFORM_FORMATS: Record<string, string> = {
-  twitter: `PLATFORM: Twitter/X (280 char limit per option)
-- Max 280 chars including hashtags
-- 3-5 hashtags at the end
-- No links`,
+  twitter: `PLATFORM: Twitter/X — 2026 format
+MAX 280 characters including hashtags. Count carefully.
+- Hook in first 8 words — that's all that shows in feed before "more"
+- No thread format — one punchy post
+- 2-4 hashtags at the end, on the same line
+- Trending hashtag style: #Kick #Exposed #Drama #[PersonName]
+- DO NOT exceed 280 chars. If over, cut words not hashtags.`,
 
-  instagram: `PLATFORM: Instagram (caption, up to 2200 chars)
-- Write a longer engaging caption that tells the full story
-- First 125 chars are shown before "more" — hook hard
-- Line breaks every 1-2 sentences
-- 5-10 hashtags at the very END after a blank line
-- End with a CTA: "Save this" / "Tag someone" / "Follow for more"`,
+  instagram: `PLATFORM: Instagram — 2026 format  
+Caption up to 400 words. First 125 chars show before "more" — make them count.
+- Line 1: The hook (under 125 chars, no hashtag here)
+- Lines 2-4: Tell the full story with detail and emotion
+- Line 5: CTA — "Save this" / "Tag someone who needs to see this" / "Follow for more clips"
+- Blank line, then hashtags: 8-15 hashtags on a single line at the very bottom
+- Mix: #[PersonName] #Kick #StreamClips #Drama + niche tags`,
 
-  tiktok: `PLATFORM: TikTok (150 char limit)
-- MAX 150 chars total
-- 3-5 trending hashtags
-- Start with hook word: "POV:" / "Wait for it" / "They really said"
-- Punchy, no full sentences needed`,
+  tiktok: `PLATFORM: TikTok — 2026 format
+Caption is 150 chars MAX. Punchy. Hook-first.
+- First word must be a hook trigger: "POV" / "Wait" / "No way" / "THEY SAID" / "Bro"
+- 3-5 hashtags after the text
+- Include at least 1 trending format tag: #fyp #foryou #viral
+- No full sentences needed — fragments hit harder
+- Think: what would make someone stop scrolling`,
 
-  youtube: `PLATFORM: YouTube Shorts
-- Write a TITLE (60 chars max) and DESCRIPTION (150 chars) separately
-- Title: front-load keyword, ALL CAPS for key words, reaction-style
-- Format each option as:
-TITLE: [title here]
-DESC: [description + #Shorts #StreamerMoments]`
+  youtube: `PLATFORM: YouTube Shorts — 2026 format
+Write a TITLE and DESCRIPTION. Format exactly like this:
+
+TITLE: [your title here]
+DESC: [your description here]
+
+Title rules (60 chars max):
+- Front-load the most shocking word or name
+- Use reaction format: "He Said WHAT?!" / "She Actually Did This" / "Nobody Expected This"
+- 1-2 words in ALL CAPS for emphasis
+- Include the person's name if known
+
+Description rules (200 chars max):
+- First sentence = what happened (for SEO)
+- End with 3-5 hashtags: #Shorts #[PersonName] #Kick #Viral #StreamMoments`,
 }
 
+// ─── Prompt builder ───────────────────────────────────────────────────────────
 function buildPrompt(
   transcript: string,
   tone: string,
   platform: string,
   streamerName: string,
   clipTitle: string,
-  customContext: string
+  allSocials: boolean
 ): string {
-  const context = [
-    streamerName ? `Streamer/Creator: ${streamerName}` : '',
-    clipTitle ? `Clip title: ${clipTitle}` : '',
-    customContext ? `Extra context: ${customContext}` : '',
-  ].filter(Boolean).join('\n')
-
   const toneText = TONE_PROMPTS[tone] ?? TONE_PROMPTS.drama
   const platformText = PLATFORM_FORMATS[platform] ?? PLATFORM_FORMATS.twitter
+  const nameInstruction = streamerName
+    ? `The streamer/creator's name is: "${streamerName}". Use this EXACT name throughout. Never use their user ID or a random string.`
+    : `No streamer name provided. Refer to them as "the streamer" or extract a name from the transcript if mentioned.`
 
-  return `You are a social media writer for a streaming drama/clip channel.
-Read the transcript carefully. Identify WHO is involved, WHAT happened, and the most shocking/quotable moment.
+  if (allSocials) {
+    // All-socials mode: 1 perfect post per platform
+    return `You are a top-tier social media strategist for a streaming clip channel with millions of followers.
+Your job: write ONE single, perfect post for ${platform.toUpperCase()} based on this clip.
 
-== PEOPLE & CONTEXT ==
-${context || 'No additional context provided'}
+== IDENTITY ==
+${nameInstruction}
+${clipTitle ? `Clip context: ${clipTitle}` : ''}
 
 == TRANSCRIPT ==
-${transcript.slice(0, 3000)}
+${transcript.slice(0, 2500)}
 
-== TONE ==
-${toneText}
+== ${toneText}
+
+== ${platformText}
+
+== YOUR TASK ==
+Write EXACTLY ONE post for ${platform.toUpperCase()}. 
+- Study the transcript and find the single most viral moment
+- Apply the tone and platform format precisely
+- Use the streamer's REAL name (${streamerName || 'the streamer'}) — NEVER their user ID
+- Only use real quotes from the transcript (exact words)
+- Make it feel like it was written by a human who actually watched the clip
+
+OUTPUT: Write only the post. No labels, no preamble, no "Here is your post:". Just the content.`
+  }
+
+  // Single platform mode: 3 options
+  return `You are a viral social media writer for a streaming clip channel.
+
+== IDENTITY ==
+${nameInstruction}
+${clipTitle ? `Clip context: ${clipTitle}` : ''}
+
+== TRANSCRIPT ==
+${transcript.slice(0, 2500)}
+
+== ${toneText}
 
 == ${platformText}
 
 == YOUR JOB ==
-Write 3 options ALL in the same tone. Each covers the same event from a DIFFERENT ANGLE:
+Write 3 different posts in the SAME tone, covering the SAME moment from 3 angles:
 
-OPTION 1 — HOT TAKE
-Your punchy opinion or reaction. Lead with the most shocking element.
-Strong opener → context → spicy take or quote → hashtags
+OPTION 1 — HOT TAKE: Your punchy reaction. Lead with the most shocking element. Opinion first.
+OPTION 2 — PULL QUOTE: Open with a real direct quote from the transcript (in "quotes"), then react.
+OPTION 3 — ANNOUNCEMENT: Frame it as breaking news. Create urgency. Make them feel they missed something.
 
-OPTION 2 — PULL QUOTE  
-Lead with an actual direct quote from the transcript (in quotes), then react.
-"Quote from transcript" → your reaction → hashtags
-The quote must be REAL and SPECIFIC — not made up.
+== CRITICAL RULES ==
+- Use "${streamerName || 'the streamer'}" by name — NEVER use random IDs or hex strings
+- Only quote things actually said in the transcript
+- Follow the platform format exactly (char limits, hashtag rules, etc.)
+- Each option must feel completely different from the others
 
-OPTION 3 — ANNOUNCEMENT HOOK
-Frame it like breaking news. Make people feel they NEED to watch.
-Hook that creates urgency → what happened → cliffhanger → hashtags
-
-== HASHTAG RULES ==
-- Use ACTUAL NAMES from transcript/context ONLY — never invent names not mentioned
-- Use platform only if relevant (#Kick #Twitch #YouTube)
-- Use drama type if it fits (#Exposed #Drama #Beef #Leaked #Scandal)
-- NEVER use #gaming #gamer #streamer unless literally about gameplay
-- Each option gets its OWN hashtags
-- 3-5 hashtags max per option
-
-== OUTPUT FORMAT ==
-Write EXACTLY this — no preamble, no extra labels:
-
+== OUTPUT FORMAT — follow exactly:
 OPTION 1
-[content]
+[post content]
 
 OPTION 2
-[content]
+[post content]
 
 OPTION 3
-[content]
+[post content]
 
-== RULES ==
-- All 3 options MUST be in the same tone
-- Use REAL quotes and REAL moments — never make things up
-- Reference ${streamerName || 'the streamer'} by name throughout
-- No preamble before OPTION 1 — start writing immediately`
+Start with OPTION 1 immediately. No intro text.`
 }
 
+// ─── AI caller ────────────────────────────────────────────────────────────────
 async function callAI(prompt: string): Promise<string> {
   const geminiKey = process.env.GEMINI_API_KEY
-  const groqKey = process.env.GROQ_API_KEY
+  const groqKey   = process.env.GROQ_API_KEY
 
   const calls: Promise<string>[] = []
 
@@ -139,9 +186,9 @@ async function callAI(prompt: string): Promise<string> {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.8, maxOutputTokens: 3000 }
+          generationConfig: { temperature: 0.85, maxOutputTokens: 2000 }
         }),
-        signal: AbortSignal.timeout(25000),
+        signal: AbortSignal.timeout(28000),
       }).then(r => r.json()).then(d => d.candidates?.[0]?.content?.parts?.[0]?.text ?? '')
     )
   }
@@ -154,15 +201,14 @@ async function callAI(prompt: string): Promise<string> {
         body: JSON.stringify({
           model: 'llama-3.3-70b-versatile',
           messages: [{ role: 'user', content: prompt }],
-          max_tokens: 3000, temperature: 0.8,
+          max_tokens: 2000, temperature: 0.85,
         }),
-        signal: AbortSignal.timeout(25000),
+        signal: AbortSignal.timeout(28000),
       }).then(r => r.json()).then(d => d.choices?.[0]?.message?.content ?? '')
     )
   }
 
   if (calls.length === 0) throw new Error('No AI API keys configured')
-
   const results = await Promise.allSettled(calls)
   for (const r of results) {
     if (r.status === 'fulfilled' && r.value?.trim()) return r.value
@@ -170,42 +216,38 @@ async function callAI(prompt: string): Promise<string> {
   throw new Error('All AI calls failed')
 }
 
+// ─── Parse 3 options from AI response ────────────────────────────────────────
 function parseOptions(raw: string): string[] {
-  const options: string[] = []
   const blocks = raw.split(/\bOPTION\s+[123]\b/i).map(s => s.trim()).filter(Boolean)
-  for (const block of blocks.slice(0, 3)) {
-    options.push(block.trim())
-  }
-  while (options.length < 3) options.push(options[0] ?? raw)
+  const options = blocks.slice(0, 3).map(b => b.replace(/^[-–—\s]+/, '').trim())
+  while (options.length < 3) options.push(options[0] ?? raw.trim())
   return options.slice(0, 3)
 }
 
-function extractHookLine(transcript: string): string {
-  if (!transcript) return ''
-  const sentences = transcript.split(/[.!?]/).map(s => s.trim()).filter(s => s.length > 15 && s.length < 120)
-  return sentences[0] ?? ''
-}
-
+// ─── Extract streamer name from URL ──────────────────────────────────────────
 function extractStreamerFromUrl(url: string): string {
   try {
     const u = new URL(url)
     if (u.hostname.includes('kick.com')) {
       const parts = u.pathname.split('/').filter(Boolean)
-      return parts[0] && parts[0] !== 'clips' ? parts[0] : ''
+      // kick.com/username  or  kick.com/username/clips/clip_id
+      // Never use a segment that looks like a clip ID (starts with clip_ or is all hex)
+      for (const part of parts) {
+        if (part === 'clips' || part.startsWith('clip_')) break
+        if (/^[a-f0-9]{8,}$/.test(part)) continue // skip hex IDs
+        return part
+      }
     }
-    if (u.hostname.includes('twitter.com') || u.hostname.includes('x.com')) {
+    if (u.hostname.includes('twitch.tv')) return u.pathname.split('/').filter(Boolean)[0] ?? ''
+    if (u.hostname.includes('twitter.com') || u.hostname.includes('x.com'))
       return u.pathname.split('/').filter(Boolean)[0]?.replace('@', '') ?? ''
-    }
-    if (u.hostname.includes('tiktok.com')) {
+    if (u.hostname.includes('tiktok.com'))
       return u.pathname.split('/').filter(Boolean)[0]?.replace('@', '') ?? ''
-    }
-    if (u.hostname.includes('twitch.tv')) {
-      return u.pathname.split('/').filter(Boolean)[0] ?? ''
-    }
   } catch {}
   return ''
 }
 
+// ─── Main handler ─────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
     const supabase = createAdminClient()
@@ -215,37 +257,56 @@ export async function POST(req: NextRequest) {
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const body = await req.json()
-    const { clipId, platform = 'twitter', tone = 'drama', streamerName: bodyStreamer, customContext = '', platforms, customTitle: bodyCustomTitle } = body
+    const {
+      clipId,
+      platform = 'twitter',
+      tone = 'drama',
+      streamerName: bodyStreamer,
+      customContext = '',
+      platforms,
+      customTitle: bodyCustomTitle,
+    } = body
 
     // Fetch clip + transcript
-    const { data: clip } = await supabase.from('clips').select('id, title, summary, job_id').eq('id', clipId).single()
+    const { data: clip } = await supabase
+      .from('clips').select('id, title, summary, job_id').eq('id', clipId).single()
 
     let transcript = clip?.summary ?? ''
-    let sourceUrl = ''
+    let sourceUrl  = ''
     let videoTitle = clip?.title ?? ''
+    let dbStreamer = ''
 
     if (clip?.job_id) {
-      const { data: job } = await supabase.from('jobs').select('source_url, video_title, transcript').eq('id', clip.job_id).single()
+      const { data: job } = await supabase
+        .from('jobs').select('source_url, video_title, transcript, streamer_name').eq('id', clip.job_id).single()
       sourceUrl = job?.source_url ?? ''
+      dbStreamer = job?.streamer_name ?? ''
       if (job?.transcript) transcript = job.transcript
       if (job?.video_title) videoTitle = job.video_title
     }
 
-    const streamerName = bodyStreamer || extractStreamerFromUrl(sourceUrl) || ''
-    // Use user-provided title if set — helps AI generate better targeted content
+    // Streamer name priority: body param → DB field → URL extraction
+    // Never fall back to a hex ID — rather use "the streamer"
+    const rawStreamer = bodyStreamer || dbStreamer || extractStreamerFromUrl(sourceUrl)
+    const streamerName = rawStreamer && !/^[a-f0-9]{8,}$/.test(rawStreamer) ? rawStreamer : ''
+
     if (bodyCustomTitle?.trim()) videoTitle = bodyCustomTitle.trim()
-    const hookLine = extractHookLine(transcript)
 
     const targetPlatforms: string[] = platforms ?? [platform]
+    const isAllSocials = targetPlatforms.length > 1
     const results: Record<string, { options: string[]; hook_line: string }> = {}
 
     await Promise.all(targetPlatforms.map(async (p) => {
-      const prompt = buildPrompt(transcript || videoTitle, tone, p, streamerName, videoTitle, customContext)
+      const prompt = buildPrompt(transcript || videoTitle, tone, p, streamerName, videoTitle, isAllSocials)
       const raw = await callAI(prompt)
-      console.log(`[generate] ${p} raw length=${raw.length} snippet="${raw.slice(0,80).replace(/\n/g,' ')}"`)
-      const options = parseOptions(raw)
-      console.log(`[generate] ${p} parsed ${options.length} options, lengths=${options.map(o=>o.length).join(',')}`)
-      results[p] = { options, hook_line: hookLine }
+      console.log(`[generate] ${p} len=${raw.length} name="${streamerName}" snippet="${raw.slice(0, 60).replace(/\n/g, ' ')}"`)
+
+      if (isAllSocials) {
+        // All-socials mode: wrap single result in array
+        results[p] = { options: [raw.trim()], hook_line: '' }
+      } else {
+        results[p] = { options: parseOptions(raw), hook_line: '' }
+      }
     }))
 
     if (targetPlatforms.length === 1) {

@@ -868,56 +868,57 @@ export default function DashboardPage() {
 
                         {/* All Socials panel */}
                         {studio.allSocials && (
-                          <div className="space-y-5">
+                          <div className="space-y-4">
                             {(['twitter', 'instagram', 'tiktok', 'youtube'] as const).map(p => {
                               const platData = studio.allSocials![p]
-                              const platLimit = { twitter: 280, instagram: 2200, tiktok: 150, youtube: 5000 }[p]
+                              const option = platData?.options?.[0] ?? ''
+                              const isRegen = studio.generatingPlatform?.startsWith(p) ?? false
                               const platLabel = { twitter: '𝕏 Twitter/X', instagram: '📸 Instagram', tiktok: '🎵 TikTok', youtube: '▶ YT Shorts' }[p]
-                              const OPTION_LABELS = ['🔥 Hot Take', '💬 Pull Quote', '📣 Announcement']
+                              const platLimit = { twitter: 280, instagram: 2200, tiktok: 150, youtube: 5000 }[p]
+                              const copyKey = ['twitter','instagram','tiktok','youtube'].indexOf(p) + 100
                               return (
                                 <div key={p} className="bg-white/3 border border-white/10 rounded-xl overflow-hidden">
                                   <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/10 bg-white/5">
                                     <span className="text-xs font-semibold text-white/70">{platLabel}</span>
-                                    <button onClick={() => regenPlatform(clip.id, clip, p)}
-                                      disabled={!!studio.generatingPlatform?.startsWith(p)}
-                                      className="text-xs text-white/30 hover:text-white/60 disabled:opacity-50">
-                                      {studio.generatingPlatform?.startsWith(p) ? '↺ Generating...' : '↺ Regen'}
+                                    <button onClick={() => regenPlatform(clip.id, clip, p)} disabled={isRegen}
+                                      className="text-xs text-white/30 hover:text-white/60 disabled:opacity-50 transition-colors">
+                                      {isRegen ? '↺ Generating...' : '↺ Regen'}
                                     </button>
                                   </div>
-                                  <div className="p-4 space-y-3">
-                                    {(!platData?.options?.length) && (
+                                  <div className="p-4">
+                                    {isRegen || !option ? (
                                       <div className="space-y-2">
-                                        {[0,1,2].map(i => <div key={i} className="h-12 bg-white/5 rounded-lg animate-pulse" />)}
+                                        <div className="h-4 bg-white/5 rounded animate-pulse w-3/4" />
+                                        <div className="h-4 bg-white/5 rounded animate-pulse w-full" />
+                                        <div className="h-4 bg-white/5 rounded animate-pulse w-1/2" />
                                       </div>
+                                    ) : (
+                                      <>
+                                        <p className="text-sm text-white/80 whitespace-pre-wrap leading-relaxed mb-3">{option}</p>
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="text-xs text-white/20">{option.length}/{platLimit} chars</span>
+                                          <button
+                                            onClick={() => { navigator.clipboard.writeText(option); updateStudio(clip.id, { copied: copyKey }) ; setTimeout(() => updateStudio(clip.id, { copied: null }), 2000) }}
+                                            className={`text-xs py-1.5 px-4 rounded-lg transition-colors ${studio.copied === copyKey ? 'bg-green-500/20 text-green-400' : 'bg-white/10 text-white/50 hover:bg-white/20'}`}>
+                                            {studio.copied === copyKey ? '✓ Copied!' : '📋 Copy'}
+                                          </button>
+                                        </div>
+                                      </>
                                     )}
-                                    {(platData?.options ?? []).map((option, i) => (
-                                      <div key={i} className="bg-white/5 rounded-lg p-3">
-                                        <div className="flex items-center justify-between mb-1.5">
-                                          <span className="text-xs text-white/30">{OPTION_LABELS[i] ?? `Option ${i+1}`}</span>
-                                          <span className="text-xs text-white/20">{option.length}/{platLimit}</span>
-                                        </div>
-                                        <p className="text-sm text-white/80 whitespace-pre-wrap leading-relaxed mb-2">{option}</p>
-                                        <div className="flex gap-2">
-                                          <button onClick={() => { navigator.clipboard.writeText(option); updateStudio(clip.id, { copied: i * 10 + ['twitter','instagram','tiktok','youtube'].indexOf(p) }) }}
-                                            className="flex-1 text-xs py-1.5 rounded-lg bg-white/10 text-white/50 hover:bg-white/20">
-                                            📋 Copy
-                                          </button>
-                                          <button onClick={() => regenOption(clip.id, clip, p, i)}
-                                            disabled={studio.generatingPlatform === `${p}-${i}`}
-                                            className="text-xs py-1.5 px-3 rounded-lg bg-white/5 text-white/40 hover:bg-white/10 disabled:opacity-50 border border-white/10">
-                                            {studio.generatingPlatform === `${p}-${i}` ? '...' : '↺'}
-                                          </button>
-                                        </div>
-                                      </div>
-                                    ))}
                                   </div>
                                 </div>
                               )
                             })}
-                            <button onClick={() => updateStudio(clip.id, { allSocials: null, options: [] })}
-                              className="w-full text-xs py-2 rounded-xl bg-white/5 text-white/30 border border-white/10 hover:bg-white/10">
-                              ← Back to platform picker
-                            </button>
+                            <div className="flex gap-2">
+                              <button onClick={() => generateAllSocials(clip.id, clip)} disabled={studio.allSocialsGenerating}
+                                className="flex-1 text-xs py-2 rounded-xl bg-[#FF6B00]/10 text-[#FF6B00]/70 border border-[#FF6B00]/20 hover:bg-[#FF6B00]/20 disabled:opacity-50">
+                                {studio.allSocialsGenerating ? '✨ Regenerating all...' : '↺ Regen all platforms'}
+                              </button>
+                              <button onClick={() => updateStudio(clip.id, { allSocials: null, options: [] })}
+                                className="text-xs py-2 px-4 rounded-xl bg-white/5 text-white/30 border border-white/10 hover:bg-white/10">
+                                ← Back
+                              </button>
+                            </div>
                           </div>
                         )}
                       </div>
