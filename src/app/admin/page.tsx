@@ -501,7 +501,7 @@ export default function AdminPage() {
               )}
 
               {/* Gemini */}
-              {[['Gemini', 'GEMINI_API_KEY', 'gemini'], ['Groq', 'GROQ_API_KEY', 'groq'], ['OpenRouter', 'OPENROUTER_API_KEY', 'openrouter']].map(([label, envBase, healthPrefix]) => {
+              {[['Gemini', 'GEMINI_API_KEY', 'gemini'], ['Gemini (Paid/Pro)', 'GEMINI_API_KEY_PAID', 'gemini'], ['Groq', 'GROQ_API_KEY', 'groq'], ['Groq (Paid/Pro)', 'GROQ_API_KEY_PAID', 'groq'], ['OpenRouter', 'OPENROUTER_API_KEY', 'openrouter']].map(([label, envBase, healthPrefix]) => {
                 const aiRows = config.filter(r => r.key.startsWith(envBase))
                 const existingNums = aiRows.map(r => parseInt(r.key.replace(envBase, '').replace('_','') || '1')).sort()
                 const nextNum = existingNums.length === 0 ? 1 : Math.max(...existingNums) + 1

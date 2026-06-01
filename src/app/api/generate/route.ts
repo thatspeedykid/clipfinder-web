@@ -1,6 +1,7 @@
 // src/app/api/generate/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
+import { getFlag } from '@/lib/flags'
 
 export const maxDuration = 45
 
@@ -169,20 +170,27 @@ async function callGroq(prompt: string, fast: boolean, model?: string, keyOverri
   return text
 }
 
-// Pick the right API keys based on user tier
-// Free tier → free keys (rate-limited but fine for 3 clips/day users)
-// Pro/Agency → paid keys (higher rate limits)
-function getKeys(tier: string): { gemini: string | undefined; groq: string | undefined } {
-  const isPaid = tier === 'pro' || tier === 'agency'
+// Pick the right API keys based on user tier + feature flag
+//
+// Toggle "feature_paid_ai_keys" in the Admin → Flags panel to activate paid keys.
+// Default (flag OFF): everyone uses free keys — safe until paid keys are ready.
+//
+// When flag is ON:
+//   Pro/Agency → GEMINI_API_KEY_PAID + GROQ_API_KEY_PAID (set in Admin → Keys)
+//   Free → always stays on free keys
+//
+function getKeys(tier: string, paidEnabled: boolean): { gemini: string | undefined; groq: string | undefined } {
+  const isPaidTier = tier === 'pro' || tier === 'agency'
+  const usePaidKeys = paidEnabled && isPaidTier
   return {
-    gemini: (isPaid ? process.env.GEMINI_API_KEY_PAID : undefined) ?? process.env.GEMINI_API_KEY,
-    groq:   (isPaid ? process.env.GROQ_API_KEY_PAID   : undefined) ?? process.env.GROQ_API_KEY,
+    gemini: (usePaidKeys ? process.env.GEMINI_API_KEY_PAID : undefined) ?? process.env.GEMINI_API_KEY,
+    groq:   (usePaidKeys ? process.env.GROQ_API_KEY_PAID   : undefined) ?? process.env.GROQ_API_KEY,
   }
 }
 
 // Race all available AIs — first non-empty response wins
-async function callAI(prompt: string, fast = false, tier = 'free'): Promise<string> {
-  const { gemini, groq } = getKeys(tier)
+async function callAI(prompt: string, fast = false, tier = 'free', paidEnabled = false): Promise<string> {
+  const { gemini, groq } = getKeys(tier, paidEnabled)
   const calls: Promise<string>[] = []
   if (gemini) calls.push(callGemini(prompt, fast, gemini))
   if (groq)   calls.push(callGroq(prompt, fast, undefined, groq))
@@ -196,8 +204,8 @@ async function callAI(prompt: string, fast = false, tier = 'free'): Promise<stri
 
 // For All Socials: split 4 platforms across available AIs to distribute load
 // Twitter+TikTok → Groq (fast, short output), Instagram+YouTube → Gemini (better long-form)
-async function callAIForPlatform(prompt: string, platform: string, tier = 'free'): Promise<string> {
-  const { gemini, groq } = getKeys(tier)
+async function callAIForPlatform(prompt: string, platform: string, tier = 'free', paidEnabled = false): Promise<string> {
+  const { gemini, groq } = getKeys(tier, paidEnabled)
 
   if (gemini && groq) {
     const useGroq = platform === 'twitter' || platform === 'tiktok'
@@ -206,7 +214,7 @@ async function callAIForPlatform(prompt: string, platform: string, tier = 'free'
     try { return await primary } catch { return await fallback }
   }
 
-  return callAI(prompt, true, tier)
+  return callAI(prompt, true, tier, paidEnabled)
 }
 
 // ─── Parse 3 options ──────────────────────────────────────────────────────────
@@ -249,8 +257,11 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const { clipId, platform = 'twitter', tone = 'drama', streamerName: bodyStreamer, platforms, customTitle: bodyCustomTitle } = body
 
-    // Get user tier to decide which API keys to use
-    const { data: profile } = await supabase.from('profiles').select('tier, is_admin').eq('id', user.id).single()
+    // Get user tier + paid AI flag
+    const [{ data: profile }, paidEnabled] = await Promise.all([
+      supabase.from('profiles').select('tier, is_admin').eq('id', user.id).single(),
+      getFlag('feature_paid_ai_keys').catch(() => false),
+    ])
     const tier = profile?.is_admin ? 'agency' : (profile?.tier ?? 'free')
 
     const { data: clip } = await supabase.from('clips').select('id, title, summary, job_id').eq('id', clipId).single()
@@ -279,14 +290,14 @@ export async function POST(req: NextRequest) {
     if (isAllSocials) {
       await Promise.all(targetPlatforms.map(async (p) => {
         const prompt = buildPrompt(transcript || videoTitle, tone, p, streamerName, videoTitle, true)
-        const raw = await callAIForPlatform(prompt, p, tier)
-        console.log(`[generate:all] ${p} tier=${tier} len=${raw.length}`)
+        const raw = await callAIForPlatform(prompt, p, tier, paidEnabled)
+        console.log(`[generate:all] ${p} tier=${tier} paid=${paidEnabled} len=${raw.length}`)
         results[p] = { options: [raw.trim()], hook_line: '' }
       }))
     } else {
       const prompt = buildPrompt(transcript || videoTitle, tone, platform, streamerName, videoTitle, false)
-      const raw = await callAI(prompt, false, tier)
-      console.log(`[generate:single] ${platform} tier=${tier} len=${raw.length} name="${streamerName}"`)
+      const raw = await callAI(prompt, false, tier, paidEnabled)
+      console.log(`[generate:single] ${platform} tier=${tier} paid=${paidEnabled} len=${raw.length} name="${streamerName}"`)
       results[platform] = { options: parseOptions(raw), hook_line: '' }
     }
 

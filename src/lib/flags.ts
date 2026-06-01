@@ -25,6 +25,7 @@ type FlagKey =
   | 'allow_free_tier'
   | 'allow_pro_tier'
   | 'allow_agency_tier'
+  | 'feature_paid_ai_keys'
 
 // Cache flags for 30 seconds to avoid hammering the DB on every request
 let cache: Record<string, boolean> = {}
