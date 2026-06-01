@@ -348,6 +348,7 @@ export default function DashboardPage() {
     }
   }
 
+  // Regen a single option within a platform
   async function regenOption(clipId: string, clip: Clip, platform: string, optionIndex: number) {
     updateStudio(clipId, { generatingPlatform: `${platform}-${optionIndex}` })
     try {
@@ -372,6 +373,28 @@ export default function DashboardPage() {
           return { ...prev, [clipId]: { ...cur, generatingPlatform: null, allSocials } }
         })
       }
+    } catch {
+      updateStudio(clipId, { generatingPlatform: null })
+    }
+  }
+
+  // Regen ALL 3 options for one platform in the all-socials panel
+  async function regenPlatform(clipId: string, clip: Clip, platform: string) {
+    updateStudio(clipId, { generatingPlatform: `${platform}-all` })
+    try {
+      const studio = studios[clipId] ?? DEFAULT_STUDIO()
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tokenRef.current}` },
+        body: JSON.stringify({ clipId, platform, tone: studio.tone, streamerName: streamerName || '', customTitle: getClipTitle(clip) }),
+      })
+      const data = await res.json()
+      setStudios(prev => {
+        const cur = prev[clipId] ?? DEFAULT_STUDIO()
+        const allSocials = { ...(cur.allSocials ?? {}) }
+        allSocials[platform] = { options: data.options ?? [], regen: false }
+        return { ...prev, [clipId]: { ...cur, generatingPlatform: null, allSocials } }
+      })
     } catch {
       updateStudio(clipId, { generatingPlatform: null })
     }
@@ -855,13 +878,18 @@ export default function DashboardPage() {
                                 <div key={p} className="bg-white/3 border border-white/10 rounded-xl overflow-hidden">
                                   <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/10 bg-white/5">
                                     <span className="text-xs font-semibold text-white/70">{platLabel}</span>
-                                    <button onClick={() => regenOption(clip.id, clip, p, 0)}
-                                      disabled={studio.generatingPlatform?.startsWith(p) ?? false}
+                                    <button onClick={() => regenPlatform(clip.id, clip, p)}
+                                      disabled={!!studio.generatingPlatform?.startsWith(p)}
                                       className="text-xs text-white/30 hover:text-white/60 disabled:opacity-50">
-                                      {studio.generatingPlatform?.startsWith(p) ? '↺ Generating...' : '↺ Regen all'}
+                                      {studio.generatingPlatform?.startsWith(p) ? '↺ Generating...' : '↺ Regen'}
                                     </button>
                                   </div>
                                   <div className="p-4 space-y-3">
+                                    {(!platData?.options?.length) && (
+                                      <div className="space-y-2">
+                                        {[0,1,2].map(i => <div key={i} className="h-12 bg-white/5 rounded-lg animate-pulse" />)}
+                                      </div>
+                                    )}
                                     {(platData?.options ?? []).map((option, i) => (
                                       <div key={i} className="bg-white/5 rounded-lg p-3">
                                         <div className="flex items-center justify-between mb-1.5">

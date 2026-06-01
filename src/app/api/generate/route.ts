@@ -242,7 +242,9 @@ export async function POST(req: NextRequest) {
     await Promise.all(targetPlatforms.map(async (p) => {
       const prompt = buildPrompt(transcript || videoTitle, tone, p, streamerName, videoTitle, customContext)
       const raw = await callAI(prompt)
+      console.log(`[generate] ${p} raw length=${raw.length} snippet="${raw.slice(0,80).replace(/\n/g,' ')}"`)
       const options = parseOptions(raw)
+      console.log(`[generate] ${p} parsed ${options.length} options, lengths=${options.map(o=>o.length).join(',')}`)
       results[p] = { options, hook_line: hookLine }
     }))
 
