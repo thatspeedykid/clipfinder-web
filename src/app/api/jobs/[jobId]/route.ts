@@ -38,21 +38,13 @@ export async function GET(
         .order('score', { ascending: false })
 
       if (data) {
-        clips = await Promise.all(data.map(async (clip) => {
-          if (clip.storage_path) {
-            try {
-              const isExpired = clip.file_expires_at && new Date(clip.file_expires_at) < new Date()
-              if (isExpired) return { ...clip, file_url: null }
-              const { data: signed } = await supabase.storage
-                .from('clips')
-                .createSignedUrl(clip.storage_path, 3600)
-              return { ...clip, file_url: signed?.signedUrl ?? clip.file_url }
-            } catch {
-              return clip
-            }
-          }
+        // Clips are on Cloudflare R2 with public URLs — file_url is already set correctly.
+        // Do NOT try to generate Supabase signed URLs (wrong storage backend, would wipe file_url).
+        clips = data.map(clip => {
+          const isExpired = clip.file_expires_at && new Date(clip.file_expires_at) < new Date()
+          if (isExpired) return { ...clip, file_url: null }
           return clip
-        }))
+        })
       }
     }
 

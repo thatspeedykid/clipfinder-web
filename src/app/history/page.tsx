@@ -56,21 +56,7 @@ function extractStreamer(url: string): string {
   return ''
 }
 
-function ClipVideoLoader({ storagePath, supabase, onUrl }: {
-  storagePath: string
-  supabase: ReturnType<typeof createClient>
-  onUrl: (url: string) => void
-}) {
-  useEffect(() => {
-    supabase.storage.from('clips').createSignedUrl(storagePath, 3600)
-      .then(({ data }) => { if (data?.signedUrl) onUrl(data.signedUrl) })
-  }, [storagePath])
-  return (
-    <div className="w-full h-full flex items-center justify-center text-white/20">
-      <p className="text-xs">Loading...</p>
-    </div>
-  )
-}
+// ClipVideoLoader removed — clips use R2 public URLs via file_url directly
 
 export default function HistoryPage() {
   const router = useRouter()
@@ -120,23 +106,17 @@ export default function HistoryPage() {
   }, [expandedJob, token])
 
   async function loadClips(jobId: string) {
-    if (expandedJob === jobId) { setExpandedJob(null); return }
+    // Toggle: if already expanded and clips loaded, collapse
+    if (expandedJob === jobId && jobClips[jobId]) { setExpandedJob(null); return }
     setExpandedJob(jobId)
+    // Already loaded — just expand
     if (jobClips[jobId]) return
     setLoadingClips(jobId)
     const res = await fetch(`/api/jobs/${jobId}`, { headers: { Authorization: `Bearer ${token}` } })
     if (res.ok) {
       const d = await res.json()
-      const clips = await Promise.all((d.clips ?? []).map(async (clip: Clip) => {
-        if (clip.storage_path) {
-          try {
-            const { data: signed } = await supabase.storage.from('clips').createSignedUrl(clip.storage_path, 3600)
-            if (signed?.signedUrl) return { ...clip, file_url: signed.signedUrl }
-          } catch {}
-        }
-        return clip
-      }))
-      setJobClips(prev => ({ ...prev, [jobId]: clips }))
+      // Clips are on R2 — file_url is already a public URL, no signed URL needed
+      setJobClips(prev => ({ ...prev, [jobId]: d.clips ?? [] }))
     }
     setLoadingClips(null)
   }
@@ -252,12 +232,6 @@ export default function HistoryPage() {
                               {clip.file_url && !expired && !videoErrors.has(clip.id) ? (
                                 <video src={clip.file_url} controls className="w-full h-full object-contain" style={{ maxHeight: '280px' }}
                                   onError={() => setVideoErrors(prev => new Set([...prev, clip.id]))} />
-                              ) : clip.storage_path && !expired && !videoErrors.has(clip.id) ? (
-                                <ClipVideoLoader storagePath={clip.storage_path} supabase={supabase}
-                                  onUrl={url => setJobClips(prev => ({
-                                    ...prev,
-                                    [job.id]: (prev[job.id] ?? []).map(c => c.id === clip.id ? { ...c, file_url: url } : c)
-                                  }))} />
                               ) : (
                                 <div className="text-center text-white/20 p-6">
                                   <p className="text-2xl mb-1">{expired ? '⏰' : videoErrors.has(clip.id) ? '⚠️' : '🎬'}</p>
