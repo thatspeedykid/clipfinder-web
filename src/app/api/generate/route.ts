@@ -124,8 +124,8 @@ OPTION 3
 }
 
 // ─── Individual AI callers ────────────────────────────────────────────────────
-async function callGemini(prompt: string, fast: boolean): Promise<string> {
-  const key = process.env.GEMINI_API_KEY
+async function callGemini(prompt: string, fast: boolean, keyOverride?: string): Promise<string> {
+  const key = keyOverride ?? process.env.GEMINI_API_KEY
   if (!key) throw new Error('no gemini key')
   // Use flash for fast mode (all-socials), pro for single detailed generations
   const model = fast ? 'gemini-2.0-flash' : 'gemini-2.0-flash'
@@ -147,8 +147,8 @@ async function callGemini(prompt: string, fast: boolean): Promise<string> {
   return text
 }
 
-async function callGroq(prompt: string, fast: boolean, model?: string): Promise<string> {
-  const key = process.env.GROQ_API_KEY
+async function callGroq(prompt: string, fast: boolean, model?: string, keyOverride?: string): Promise<string> {
+  const key = keyOverride ?? process.env.GROQ_API_KEY
   if (!key) throw new Error('no groq key')
   // Fast: 8b-instant is Groq's fastest + cheapest, good enough for social posts
   const m = model ?? (fast ? 'llama-3.1-8b-instant' : 'llama-3.3-70b-versatile')
@@ -169,15 +169,24 @@ async function callGroq(prompt: string, fast: boolean, model?: string): Promise<
   return text
 }
 
+// Pick the right API keys based on user tier
+// Free tier → free keys (rate-limited but fine for 3 clips/day users)
+// Pro/Agency → paid keys (higher rate limits)
+function getKeys(tier: string): { gemini: string | undefined; groq: string | undefined } {
+  const isPaid = tier === 'pro' || tier === 'agency'
+  return {
+    gemini: (isPaid ? process.env.GEMINI_API_KEY_PAID : undefined) ?? process.env.GEMINI_API_KEY,
+    groq:   (isPaid ? process.env.GROQ_API_KEY_PAID   : undefined) ?? process.env.GROQ_API_KEY,
+  }
+}
+
 // Race all available AIs — first non-empty response wins
-async function callAI(prompt: string, fast = false): Promise<string> {
-  const calls: Promise<string>[] = [
-    callGemini(prompt, fast),
-    callGroq(prompt, fast),
-  ].filter(Boolean)
-
+async function callAI(prompt: string, fast = false, tier = 'free'): Promise<string> {
+  const { gemini, groq } = getKeys(tier)
+  const calls: Promise<string>[] = []
+  if (gemini) calls.push(callGemini(prompt, fast, gemini))
+  if (groq)   calls.push(callGroq(prompt, fast, undefined, groq))
   if (calls.length === 0) throw new Error('No AI keys configured')
-
   try {
     return await Promise.any(calls)
   } catch {
@@ -185,21 +194,19 @@ async function callAI(prompt: string, fast = false): Promise<string> {
   }
 }
 
-// For All Socials: split 4 platforms across available AIs in parallel
-// Twitter+TikTok → Groq (fast), Instagram+YouTube → Gemini (better for longer)
-async function callAIForPlatform(prompt: string, platform: string): Promise<string> {
-  const hasGemini = !!process.env.GEMINI_API_KEY
-  const hasGroq   = !!process.env.GROQ_API_KEY
+// For All Socials: split 4 platforms across available AIs to distribute load
+// Twitter+TikTok → Groq (fast, short output), Instagram+YouTube → Gemini (better long-form)
+async function callAIForPlatform(prompt: string, platform: string, tier = 'free'): Promise<string> {
+  const { gemini, groq } = getKeys(tier)
 
-  if (hasGemini && hasGroq) {
-    // Split load: short-format platforms to Groq, long-format to Gemini
+  if (gemini && groq) {
     const useGroq = platform === 'twitter' || platform === 'tiktok'
-    const primary  = useGroq ? callGroq(prompt, true) : callGemini(prompt, true)
-    const fallback = useGroq ? callGemini(prompt, true) : callGroq(prompt, true)
+    const primary  = useGroq ? callGroq(prompt, true, undefined, groq) : callGemini(prompt, true, gemini)
+    const fallback = useGroq ? callGemini(prompt, true, gemini)        : callGroq(prompt, true, undefined, groq)
     try { return await primary } catch { return await fallback }
   }
 
-  return callAI(prompt, true)
+  return callAI(prompt, true, tier)
 }
 
 // ─── Parse 3 options ──────────────────────────────────────────────────────────
@@ -242,6 +249,10 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const { clipId, platform = 'twitter', tone = 'drama', streamerName: bodyStreamer, platforms, customTitle: bodyCustomTitle } = body
 
+    // Get user tier to decide which API keys to use
+    const { data: profile } = await supabase.from('profiles').select('tier, is_admin').eq('id', user.id).single()
+    const tier = profile?.is_admin ? 'agency' : (profile?.tier ?? 'free')
+
     const { data: clip } = await supabase.from('clips').select('id, title, summary, job_id').eq('id', clipId).single()
     let transcript = clip?.summary ?? ''
     let sourceUrl  = ''
@@ -266,18 +277,16 @@ export async function POST(req: NextRequest) {
     const results: Record<string, { options: string[]; hook_line: string }> = {}
 
     if (isAllSocials) {
-      // All 4 platforms in parallel, split across AIs to distribute load
       await Promise.all(targetPlatforms.map(async (p) => {
         const prompt = buildPrompt(transcript || videoTitle, tone, p, streamerName, videoTitle, true)
-        const raw = await callAIForPlatform(prompt, p)
-        console.log(`[generate:all] ${p} len=${raw.length}`)
+        const raw = await callAIForPlatform(prompt, p, tier)
+        console.log(`[generate:all] ${p} tier=${tier} len=${raw.length}`)
         results[p] = { options: [raw.trim()], hook_line: '' }
       }))
     } else {
-      // Single platform — race both AIs, use 3 options
       const prompt = buildPrompt(transcript || videoTitle, tone, platform, streamerName, videoTitle, false)
-      const raw = await callAI(prompt, false)
-      console.log(`[generate:single] ${platform} len=${raw.length} name="${streamerName}"`)
+      const raw = await callAI(prompt, false, tier)
+      console.log(`[generate:single] ${platform} tier=${tier} len=${raw.length} name="${streamerName}"`)
       results[platform] = { options: parseOptions(raw), hook_line: '' }
     }
 
