@@ -104,6 +104,7 @@ export default function DashboardPage() {
   const [showChunkOptions, setShowChunkOptions] = useState(false)
   const pollRef = useRef<NodeJS.Timeout | null>(null)
   const extraPollRefs = useRef<Record<string, NodeJS.Timeout>>({})
+  const dismissedJobIds = useRef<Set<string>>(new Set())
 
   const source = detectSource(url)
 
@@ -173,8 +174,10 @@ export default function DashboardPage() {
       const { jobs: activeJobs } = await r.json()
       if (activeJobs?.length > 0) {
         setJob(prev => {
-          // Only update if no active job is tracked, or if current one is done
-          if (!prev || ['done','error','cancelled'].includes(prev.status)) return activeJobs[0]
+          // Skip jobs that were explicitly dismissed this session
+          const candidate = activeJobs.find((j: Job) => !dismissedJobIds.current.has(j.id))
+          if (!candidate) return prev
+          if (!prev || ['done','error','cancelled'].includes(prev.status)) return candidate
           return prev
         })
       }
@@ -259,7 +262,8 @@ export default function DashboardPage() {
 
   async function startJob(targetUrl: string) {
     setSubmitting(true); setError(''); setClips([]); setJob(null); setShowChunkOptions(false)
-    if (user) sessionStorage.removeItem(`cf_dismissed_${user.id}`) // allow restore for new job
+    dismissedJobIds.current.clear() // allow new job to be tracked
+    if (user) sessionStorage.removeItem(`cf_dismissed_${user.id}`)
 
     // Jobs API now handles worker dispatch server-side (WORKER_SECRET is server-only)
     const jobRes = await fetch('/api/jobs', {
@@ -296,10 +300,14 @@ export default function DashboardPage() {
       if (extraPollRefs.current[jobId]) { clearInterval(extraPollRefs.current[jobId]); delete extraPollRefs.current[jobId] }
       return
     }
-    setJob(null); setClips([]); setOpenStudio(null); setUrl('')
+    // Track dismissed job ID so scanner doesn't restore it
+    setJob(prev => {
+      if (prev?.id) dismissedJobIds.current.add(prev.id)
+      return null
+    })
+    setClips([]); setOpenStudio(null); setUrl('')
     if (user) {
       localStorage.removeItem(`cf_active_job_${user.id}`)
-      // Mark as dismissed so restore on refresh doesn't bring it back
       sessionStorage.setItem(`cf_dismissed_${user.id}`, '1')
     }
   }
@@ -710,15 +718,18 @@ export default function DashboardPage() {
 
                       {/* LEFT — big video */}
                       <div className="lg:w-[45%] bg-black flex items-center justify-center" style={{ minHeight: '220px' }}>
-                        {clip.file_url && !videoErrors.has(clip.id) ? (
-                          <video src={clip.file_url} controls className="w-full h-full object-contain" style={{ maxHeight: '280px' }}
+                        {clip.storage_path && !videoErrors.has(clip.id) ? (
+                          <video src={clip.file_url || undefined} controls className="w-full h-full object-contain" style={{ maxHeight: '280px' }}
                             onError={() => {
-                              // Mark as error - hide blank video
-                              setVideoErrors(prev => new Set([...prev, clip.id]))
+                              // URL may be stale — fetch fresh pre-signed URL via stream proxy
+                              if (tokenRef.current) {
+                                fetch(`/api/clips/${clip.id}/stream`, { headers: { Authorization: `Bearer ${tokenRef.current}` } })
+                                  .then(r => { if (r.ok || r.redirected) setClips(prev => prev.map(c => c.id === clip.id ? { ...c, file_url: r.url } : c)) })
+                                  .catch(() => setVideoErrors(prev => new Set([...prev, clip.id])))
+                              } else {
+                                setVideoErrors(prev => new Set([...prev, clip.id]))
+                              }
                             }} />
-                        ) : clip.storage_path && !videoErrors.has(clip.id) ? (
-                          <ClipVideoLoader storagePath={clip.storage_path} supabase={supabase}
-                            onUrl={(url) => setClips(prev => prev.map(c => c.id === clip.id ? { ...c, file_url: url } : c))} />
                         ) : videoErrors.has(clip.id) ? (
                           <div className="text-center text-white/20 p-6">
                             <p className="text-3xl mb-2">⚠️</p>
