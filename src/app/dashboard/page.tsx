@@ -135,7 +135,9 @@ export default function DashboardPage() {
         // Keep for 30 minutes regardless of status
         if (Date.now() - parsed.savedAt < 60 * 60 * 1000) {
           setJob(parsed.job)
-          if (parsed.url) setUrl(parsed.url)
+          // Only restore URL if job is still active (not done/error)
+          const activeStatuses = ['queued','downloading','transcribing','analyzing','cutting']
+          if (parsed.url && activeStatuses.includes(parsed.job?.status)) setUrl(parsed.url)
           // Restore clips too
           if (parsed.clips?.length > 0) setClips(parsed.clips)
           if (parsed.openStudio) setOpenStudio(parsed.openStudio)
@@ -221,6 +223,7 @@ export default function DashboardPage() {
     if (!jobRes.ok) { setError(jobData.error ?? 'Failed to start job'); return }
     const newJob: Job = { id: jobData.jobId, status: 'queued', progress: 0, progress_msg: 'Starting...', source_url: targetUrl }
     setJob(newJob)
+    setUrl('') // clear input after job starts
   }
 
   async function handleSubmit(e: React.FormEvent) {

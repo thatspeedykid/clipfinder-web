@@ -1133,62 +1133,17 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
             clip_size_mb = clip_path.stat().st_size / 1024 / 1024
             print(f"[cut] clip {i+1} — {clip_size_mb:.1f}MB")
 
-            # ── Upload to Supabase Storage ────────────────────────────────
-            # Free tier: 24h expiry. Pro/Agency: 15 days.
-            try:
-                # Get user tier for expiry calculation
-                profile_res = sb.table("profiles").select("tier").eq("id", user_id).single().execute()
-                tier = (profile_res.data or {}).get("tier", "free")
-                from datetime import datetime, timedelta
-                if tier == "free":
-                    expires = datetime.utcnow() + timedelta(hours=12)
-                else:
-                    expires = datetime.utcnow() + timedelta(days=15)
-
-                # Upload to Supabase Storage bucket "clips"
-                storage_path = f"{user_id}/{job_id}/clip_{i+1}.mp4"
-                with open(clip_path, "rb") as f:
-                    clip_data = f.read()
-
-                # Upload to R2
-                _enforce_storage_limit(sb, clip_size_mb)
-                s3, bucket = _get_r2_client()
-                if not s3:
-                    print(f"[r2] not configured, skipping")
-                    clip_path.unlink(missing_ok=True)
-                    continue
-                s3.upload_file(str(clip_path), bucket, storage_path,
-                    ExtraArgs={"ContentType": "video/mp4"})
-                public_base = os.environ.get("R2_PUBLIC_URL", "").rstrip("/")
-                file_url = f"{public_base}/{storage_path}" if public_base else ""
-
-                # Update clip record — use the real Supabase UUID from our map
-                clip_id = clip_id_map.get(start_ts, "")
-                if not clip_id:
-                    # Last resort: fetch by job_id + start_ts
-                    try:
-                        row = sb.table("clips").select("id").eq("job_id", job_id).eq("start_ts", start_ts).single().execute()
-                        clip_id = (row.data or {}).get("id", "")
-                    except Exception:
-                        pass
-                if clip_id:
-                    sb.table("clips").update({
-                        "file_url": file_url,
-                        "file_expires_at": expires.isoformat(),
-                        "file_size_mb": round(clip_size_mb, 2),
-                        "storage_path": storage_path,
-                    }).eq("id", clip_id).execute()
-                    print(f"[storage] updated clip record {clip_id[:8]}")
-                else:
-                    print(f"[storage] WARNING: could not find clip record for start_ts={start_ts}")
-
-                print(f"[storage] uploaded clip {i+1} — expires {expires.strftime('%Y-%m-%d %H:%M')} UTC")
-                clip_path.unlink(missing_ok=True)
-
-            except Exception as e:
-                print(f"[storage] upload failed for clip {i+1}: {e}")
-                # Still delete local file even if upload fails
-                clip_path.unlink(missing_ok=True)
+            # ── Upload to R2 using shared helper ─────────────────────────
+            clip_id = clip_id_map.get(start_ts, "")
+            if not clip_id:
+                # Fallback: fetch from DB by start_ts
+                try:
+                    row = sb.table("clips").select("id").eq("job_id", job_id).eq("start_ts", start_ts).single().execute()
+                    clip_id = (row.data or {}).get("id", "")
+                except Exception:
+                    pass
+            print(f"[cut] uploading clip {i+1} start_ts={start_ts} clip_id={clip_id[:8] if clip_id else 'MISSING'}")
+            _upload_clip_to_storage(sb, clip_path, user_id, job_id, i+1, clip_id, start_ts)
 
         # ── Optional: Upload to Google Drive ──────────────────────────────────
         try:
