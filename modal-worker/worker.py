@@ -604,10 +604,10 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
                 print(f"[segments] downloading seg {seg.get('index')}: {seg_url[:60]}")
                 result = subprocess.run([
                     "ffmpeg", "-i", seg_url,
-                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-                    "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+                    "-c", "copy",  # stream copy — no re-encode, instant for any length
+                    "-movflags", "+faststart",
                     str(seg_path), "-y", "-loglevel", "error"
-                ], capture_output=True, text=True, timeout=300)
+                ], capture_output=True, text=True, timeout=600)
                 if result.returncode == 0 and seg_path.exists() and seg_path.stat().st_size > 0:
                     segment_paths.append(seg_path)
                     print(f"[segments] seg {seg.get('index')} downloaded: {seg_path.stat().st_size/1024/1024:.1f}MB")
@@ -630,10 +630,10 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
             combined_path = tmp / "combined.mp4"
             concat_result = subprocess.run([
                 "ffmpeg", "-f", "concat", "-safe", "0", "-i", str(concat_file),
-                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-                "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+                "-c", "copy",  # stream copy — no re-encode, finishes in seconds
+                "-movflags", "+faststart",
                 str(combined_path), "-y", "-loglevel", "error"
-            ], capture_output=True, text=True, timeout=300)
+            ], capture_output=True, text=True, timeout=600)
 
             if concat_result.returncode != 0 or not combined_path.exists():
                 print(f"[segments] concat failed: {concat_result.stderr[-200:]}")
