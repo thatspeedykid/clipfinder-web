@@ -4,240 +4,205 @@ import { createAdminClient } from '@/lib/supabase/server'
 
 export const maxDuration = 45
 
-// ─── Tone system prompts ──────────────────────────────────────────────────────
+// ─── Tone prompts ─────────────────────────────────────────────────────────────
 const TONE_PROMPTS: Record<string, string> = {
-  drama: `TONE: Drama/Tea Account (2026 style)
-You are a streaming drama account with 500k+ followers. Your posts feel like insider gossip from someone who was IN the room.
+  drama: `TONE: Drama/Tea Account (2026)
+You are a streaming drama account with 500k followers. Insider gossip energy.
 - Lead with the most unhinged moment — no warmup
-- Write like you're telling your mutuals, not writing a press release
-- Use 1-2 emojis MAX — placed for impact, not decoration
-- No "wait till you see this" filler. Just drop the heat.
+- Write like you're telling your mutuals what just happened
+- 1-2 emojis MAX, placed for impact not decoration
 - Make the person sound iconic, not evil`,
 
-  tea: `TONE: Tea/Soft Expose (2026 style)
-Calm, devastatingly factual. The most dangerous posts are the ones that sound unbothered.
-- Open with a cold fact, no emotion
+  tea: `TONE: Calm Tea/Soft Expose (2026)
+Devastatingly factual. Unbothered delivery.
+- Open with a cold fact, zero emotion
 - "So apparently" / "Turns out" / "Friendly reminder that" energy
-- Build the story like a court case — evidence first, reaction second
-- 1 emoji max, only if it adds irony
-- End on a cliffhanger or unanswered question`,
+- Build like a court case — evidence first, reaction second
+- 1 emoji max. End on unanswered question or cliffhanger`,
 
-  breaking: `TONE: Breaking News (2026 style)
-Write like a journalist covering a live stream beat. Factual but urgent.
-- Start with BREAKING: or 🚨 BREAKING:
-- Who, what, when — first sentence has all three
-- Quote the exact words if possible (only real quotes from transcript)
-- No speculation, no opinion — let the facts be wild
-- Hashtags that a journalist would use`,
+  breaking: `TONE: Breaking News (2026)
+Journalist covering a live stream beat. Factual but urgent.
+- Start BREAKING: or 🚨 BREAKING:
+- Who + what + when in the first sentence
+- Quote exact words from transcript only (no made-up quotes)
+- No speculation — let the facts be wild`,
 
-  hype: `TONE: Hype/Celebration (2026 style)
-Make the viewer feel like they MISSED something legendary. Pure positive chaos.
-- ALL CAPS for key moments (sparingly — 1-2 words max)
-- Exclamation energy but not cringe — think sports commentator
-- Focus on the reaction, the moment, the energy
-- Make them want to share it with their whole group chat
-- "This is the clip of the year" / "Nobody was ready" energy`,
+  hype: `TONE: Hype/Celebration (2026)
+Make them feel they MISSED something legendary.
+- ALL CAPS for 1-2 key words max
+- Exclamation energy but not cringe — sports commentator
+- "Nobody was ready" / "Clip of the year" energy
+- Focus on the reaction, the moment, the chaos`,
 
-  exaggerate: `TONE: Exaggerate/Villain Arc (2026 style)
-Dramatize real events to absurd levels. The subject becomes a movie character.
-- Write in 4-5 short punchy lines that build like a story beat
-- Each line = 1 escalation. No line over 12 words.
-- Use 1 emoji at the END of each line (different each time)
-- The last line should be the wildest
-- Stay factual — just frame it cinematically`,
+  exaggerate: `TONE: Villain Arc / Exaggerate (2026)
+Dramatize real events cinematically. Subject becomes a movie character.
+- 4-5 SHORT punchy lines that build like story beats
+- Each line max 12 words. 1 emoji at END of each line (different each)
+- Last line = the wildest escalation
+- Stay factual — just frame it like a film trailer`,
 }
 
 // ─── Platform formats ─────────────────────────────────────────────────────────
 const PLATFORM_FORMATS: Record<string, string> = {
-  twitter: `PLATFORM: Twitter/X — 2026 format
-MAX 280 characters including hashtags. Count carefully.
-- Hook in first 8 words — that's all that shows in feed before "more"
-- No thread format — one punchy post
-- 2-4 hashtags at the end, on the same line
-- Trending hashtag style: #Kick #Exposed #Drama #[PersonName]
-- DO NOT exceed 280 chars. If over, cut words not hashtags.`,
+  twitter: `PLATFORM: Twitter/X
+HARD LIMIT: 280 characters total including hashtags. Count every character.
+- Hook in first 8 words (all that shows before "more")
+- One punchy paragraph — no threads
+- 2-4 hashtags at end on same line: #Kick #Exposed #[PersonName]
+- If over 280 chars, cut words not hashtags`,
 
-  instagram: `PLATFORM: Instagram — 2026 format  
-Caption up to 400 words. First 125 chars show before "more" — make them count.
-- Line 1: The hook (under 125 chars, no hashtag here)
-- Lines 2-4: Tell the full story with detail and emotion
-- Line 5: CTA — "Save this" / "Tag someone who needs to see this" / "Follow for more clips"
-- Blank line, then hashtags: 8-15 hashtags on a single line at the very bottom
-- Mix: #[PersonName] #Kick #StreamClips #Drama + niche tags`,
+  instagram: `PLATFORM: Instagram
+Up to 400 words. First 125 chars show before "more" — hook must be there.
+- Line 1: Hook (under 125 chars, no hashtag)
+- Lines 2-4: Full story with detail and emotion, short paragraphs
+- Line 5: CTA — "Save this" / "Tag someone" / "Follow for more"
+- Blank line then 8-15 hashtags: #[Name] #Kick #Drama #StreamClips + niche tags`,
 
-  tiktok: `PLATFORM: TikTok — 2026 format
-Caption is 150 chars MAX. Punchy. Hook-first.
-- First word must be a hook trigger: "POV" / "Wait" / "No way" / "THEY SAID" / "Bro"
-- 3-5 hashtags after the text
-- Include at least 1 trending format tag: #fyp #foryou #viral
-- No full sentences needed — fragments hit harder
-- Think: what would make someone stop scrolling`,
+  tiktok: `PLATFORM: TikTok
+HARD LIMIT: 150 characters total. Punchy. Hook word FIRST.
+- First word: "POV" / "Wait" / "No way" / "THEY SAID" / "Bro"
+- 3-5 hashtags after: always include #fyp or #foryou
+- Fragments hit harder than sentences
+- Think: what makes someone stop mid-scroll`,
 
-  youtube: `PLATFORM: YouTube Shorts — 2026 format
-Write a TITLE and DESCRIPTION. Format exactly like this:
+  youtube: `PLATFORM: YouTube Shorts
+Output EXACTLY this format — two lines, nothing else:
+TITLE: [title here]
+DESC: [description here]
 
-TITLE: [your title here]
-DESC: [your description here]
-
-Title rules (60 chars max):
-- Front-load the most shocking word or name
-- Use reaction format: "He Said WHAT?!" / "She Actually Did This" / "Nobody Expected This"
-- 1-2 words in ALL CAPS for emphasis
-- Include the person's name if known
-
-Description rules (200 chars max):
-- First sentence = what happened (for SEO)
-- End with 3-5 hashtags: #Shorts #[PersonName] #Kick #Viral #StreamMoments`,
+Title (60 chars max): front-load shocking word or name, reaction format "He Said WHAT?!" / "Nobody Expected This", 1-2 words ALL CAPS
+Description (200 chars max): what happened in plain words for SEO, end with #Shorts #[Name] #Viral #StreamMoments`,
 }
 
 // ─── Prompt builder ───────────────────────────────────────────────────────────
-function buildPrompt(
-  transcript: string,
-  tone: string,
-  platform: string,
-  streamerName: string,
-  clipTitle: string,
-  allSocials: boolean
-): string {
-  const toneText = TONE_PROMPTS[tone] ?? TONE_PROMPTS.drama
-  const platformText = PLATFORM_FORMATS[platform] ?? PLATFORM_FORMATS.twitter
-  const nameInstruction = streamerName
-    ? `The streamer/creator's name is: "${streamerName}". Use this EXACT name throughout. Never use their user ID or a random string.`
-    : `No streamer name provided. Refer to them as "the streamer" or extract a name from the transcript if mentioned.`
+function buildPrompt(transcript: string, tone: string, platform: string, streamerName: string, clipTitle: string, singlePost: boolean): string {
+  const nameNote = streamerName
+    ? `Streamer name: "${streamerName}" — use this EXACT name. Never use IDs, hex strings, or placeholders.`
+    : `No name available — say "the streamer" or pull a name from the transcript if mentioned.`
 
-  if (allSocials) {
-    // All-socials mode: 1 perfect post per platform
-    return `You are a top-tier social media strategist for a streaming clip channel with millions of followers.
-Your job: write ONE single, perfect post for ${platform.toUpperCase()} based on this clip.
-
-== IDENTITY ==
-${nameInstruction}
+  const header = `You are a viral social media writer for a streaming clip channel.
+${nameNote}
 ${clipTitle ? `Clip context: ${clipTitle}` : ''}
 
-== TRANSCRIPT ==
-${transcript.slice(0, 2500)}
+TRANSCRIPT:
+${transcript.slice(0, 2000)}
 
-== ${toneText}
+${TONE_PROMPTS[tone] ?? TONE_PROMPTS.drama}
 
-== ${platformText}
+${PLATFORM_FORMATS[platform] ?? PLATFORM_FORMATS.twitter}`
 
-== YOUR TASK ==
-Write EXACTLY ONE post for ${platform.toUpperCase()}. 
-- Study the transcript and find the single most viral moment
-- Apply the tone and platform format precisely
-- Use the streamer's REAL name (${streamerName || 'the streamer'}) — NEVER their user ID
-- Only use real quotes from the transcript (exact words)
-- Make it feel like it was written by a human who actually watched the clip
+  if (singlePost) {
+    return `${header}
 
-OUTPUT: Write only the post. No labels, no preamble, no "Here is your post:". Just the content.`
+Write ONE single perfect post for ${platform.toUpperCase()}. Apply the tone and format exactly.
+Only use real quotes from the transcript. Use the streamer's actual name.
+Output ONLY the post — no labels, no "here is your post", no preamble.`
   }
 
-  // Single platform mode: 3 options
-  return `You are a viral social media writer for a streaming clip channel.
+  return `${header}
 
-== IDENTITY ==
-${nameInstruction}
-${clipTitle ? `Clip context: ${clipTitle}` : ''}
+Write 3 posts in the SAME tone from 3 different angles:
 
-== TRANSCRIPT ==
-${transcript.slice(0, 2500)}
+OPTION 1 — HOT TAKE: Punchy opinion. Lead with the most shocking element.
+OPTION 2 — PULL QUOTE: Open with a real quote from the transcript in "quotes", then react.
+OPTION 3 — ANNOUNCEMENT: Breaking news frame. Create urgency. Make them feel they missed it.
 
-== ${toneText}
-
-== ${platformText}
-
-== YOUR JOB ==
-Write 3 different posts in the SAME tone, covering the SAME moment from 3 angles:
-
-OPTION 1 — HOT TAKE: Your punchy reaction. Lead with the most shocking element. Opinion first.
-OPTION 2 — PULL QUOTE: Open with a real direct quote from the transcript (in "quotes"), then react.
-OPTION 3 — ANNOUNCEMENT: Frame it as breaking news. Create urgency. Make them feel they missed something.
-
-== CRITICAL RULES ==
-- Use "${streamerName || 'the streamer'}" by name — NEVER use random IDs or hex strings
+RULES:
+- Use "${streamerName || 'the streamer'}" by name — never IDs or random strings
 - Only quote things actually said in the transcript
-- Follow the platform format exactly (char limits, hashtag rules, etc.)
-- Each option must feel completely different from the others
+- Each option must feel completely different
 
-== OUTPUT FORMAT — follow exactly:
+OUTPUT — follow exactly, no intro:
 OPTION 1
-[post content]
+[post]
 
 OPTION 2
-[post content]
+[post]
 
 OPTION 3
-[post content]
-
-Start with OPTION 1 immediately. No intro text.`
+[post]`
 }
 
-// ─── AI caller ────────────────────────────────────────────────────────────────
-// Race Gemini and Groq — use whichever responds first with a non-empty result
-async function callAI(prompt: string, fastMode = false): Promise<string> {
-  const geminiKey = process.env.GEMINI_API_KEY
-  const groqKey   = process.env.GROQ_API_KEY
-  // Fast mode (All Socials): use Groq with smaller fast model to avoid timeouts
-  const groqModel = fastMode ? 'llama-3.1-8b-instant' : 'llama-3.3-70b-versatile'
-  const maxTokens = fastMode ? 800 : 2000
-  const timeoutMs = fastMode ? 15000 : 22000
-
-  const makeGemini = () => geminiKey ? fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
+// ─── Individual AI callers ────────────────────────────────────────────────────
+async function callGemini(prompt: string, fast: boolean): Promise<string> {
+  const key = process.env.GEMINI_API_KEY
+  if (!key) throw new Error('no gemini key')
+  // Use flash for fast mode (all-socials), pro for single detailed generations
+  const model = fast ? 'gemini-2.0-flash' : 'gemini-2.0-flash'
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.85, maxOutputTokens: maxTokens }
+        generationConfig: { temperature: 0.85, maxOutputTokens: fast ? 600 : 1500 }
       }),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(fast ? 12000 : 20000),
     }
-  ).then(r => r.json()).then(d => {
-    const text = d.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
-    if (!text.trim()) throw new Error('empty')
-    return text
-  }) : Promise.reject('no key')
+  )
+  const d = await res.json()
+  const text = d.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+  if (!text.trim()) throw new Error('gemini empty')
+  return text
+}
 
-  const makeGroq = () => groqKey ? fetch(
-    'https://api.groq.com/openai/v1/chat/completions',
-    {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${groqKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: groqModel,
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: maxTokens, temperature: 0.85,
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
-    }
-  ).then(r => r.json()).then(d => {
-    const text = d.choices?.[0]?.message?.content ?? ''
-    if (!text.trim()) throw new Error('empty')
-    return text
-  }) : Promise.reject('no key')
+async function callGroq(prompt: string, fast: boolean, model?: string): Promise<string> {
+  const key = process.env.GROQ_API_KEY
+  if (!key) throw new Error('no groq key')
+  // Fast: 8b-instant is Groq's fastest + cheapest, good enough for social posts
+  const m = model ?? (fast ? 'llama-3.1-8b-instant' : 'llama-3.3-70b-versatile')
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: m,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: fast ? 600 : 1500,
+      temperature: 0.85,
+    }),
+    signal: AbortSignal.timeout(fast ? 10000 : 18000),
+  })
+  const d = await res.json()
+  const text = d.choices?.[0]?.message?.content ?? ''
+  if (!text.trim()) throw new Error('groq empty')
+  return text
+}
 
-  if (!geminiKey && !groqKey) throw new Error('No AI API keys configured')
+// Race all available AIs — first non-empty response wins
+async function callAI(prompt: string, fast = false): Promise<string> {
+  const calls: Promise<string>[] = [
+    callGemini(prompt, fast),
+    callGroq(prompt, fast),
+  ].filter(Boolean)
 
-  // Promise.any — use whichever AI responds first with real content
+  if (calls.length === 0) throw new Error('No AI keys configured')
+
   try {
-    const calls = [makeGemini(), makeGroq()].filter((_, i) =>
-      i === 0 ? !!geminiKey : !!groqKey
-    )
     return await Promise.any(calls)
   } catch {
-    // Both failed — try each sequentially as last resort
-    if (geminiKey) {
-      try { return await makeGemini() } catch {}
-    }
-    if (groqKey) {
-      try { return await makeGroq() } catch {}
-    }
-    throw new Error('All AI calls failed')
+    throw new Error('All AI calls failed or returned empty')
   }
 }
 
-// ─── Parse 3 options from AI response ────────────────────────────────────────
+// For All Socials: split 4 platforms across available AIs in parallel
+// Twitter+TikTok → Groq (fast), Instagram+YouTube → Gemini (better for longer)
+async function callAIForPlatform(prompt: string, platform: string): Promise<string> {
+  const hasGemini = !!process.env.GEMINI_API_KEY
+  const hasGroq   = !!process.env.GROQ_API_KEY
+
+  if (hasGemini && hasGroq) {
+    // Split load: short-format platforms to Groq, long-format to Gemini
+    const useGroq = platform === 'twitter' || platform === 'tiktok'
+    const primary  = useGroq ? callGroq(prompt, true) : callGemini(prompt, true)
+    const fallback = useGroq ? callGemini(prompt, true) : callGroq(prompt, true)
+    try { return await primary } catch { return await fallback }
+  }
+
+  return callAI(prompt, true)
+}
+
+// ─── Parse 3 options ──────────────────────────────────────────────────────────
 function parseOptions(raw: string): string[] {
   const blocks = raw.split(/\bOPTION\s+[123]\b/i).map(s => s.trim()).filter(Boolean)
   const options = blocks.slice(0, 3).map(b => b.replace(/^[-–—\s]+/, '').trim())
@@ -245,17 +210,14 @@ function parseOptions(raw: string): string[] {
   return options.slice(0, 3)
 }
 
-// ─── Extract streamer name from URL ──────────────────────────────────────────
+// ─── Streamer name extraction ─────────────────────────────────────────────────
 function extractStreamerFromUrl(url: string): string {
   try {
     const u = new URL(url)
     if (u.hostname.includes('kick.com')) {
-      const parts = u.pathname.split('/').filter(Boolean)
-      // kick.com/username  or  kick.com/username/clips/clip_id
-      // Never use a segment that looks like a clip ID (starts with clip_ or is all hex)
-      for (const part of parts) {
+      for (const part of u.pathname.split('/').filter(Boolean)) {
         if (part === 'clips' || part.startsWith('clip_')) break
-        if (/^[a-f0-9]{8,}$/.test(part)) continue // skip hex IDs
+        if (/^[a-f0-9]{8,}$/.test(part)) continue
         return part
       }
     }
@@ -278,57 +240,46 @@ export async function POST(req: NextRequest) {
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const body = await req.json()
-    const {
-      clipId,
-      platform = 'twitter',
-      tone = 'drama',
-      streamerName: bodyStreamer,
-      customContext = '',
-      platforms,
-      customTitle: bodyCustomTitle,
-    } = body
+    const { clipId, platform = 'twitter', tone = 'drama', streamerName: bodyStreamer, platforms, customTitle: bodyCustomTitle } = body
 
-    // Fetch clip + transcript
-    const { data: clip } = await supabase
-      .from('clips').select('id, title, summary, job_id').eq('id', clipId).single()
-
+    const { data: clip } = await supabase.from('clips').select('id, title, summary, job_id').eq('id', clipId).single()
     let transcript = clip?.summary ?? ''
     let sourceUrl  = ''
     let videoTitle = clip?.title ?? ''
     let dbStreamer = ''
 
     if (clip?.job_id) {
-      const { data: job } = await supabase
-        .from('jobs').select('source_url, video_title, transcript, streamer_name').eq('id', clip.job_id).single()
+      const { data: job } = await supabase.from('jobs').select('source_url, video_title, transcript, streamer_name').eq('id', clip.job_id).single()
       sourceUrl = job?.source_url ?? ''
       dbStreamer = job?.streamer_name ?? ''
       if (job?.transcript) transcript = job.transcript
       if (job?.video_title) videoTitle = job.video_title
     }
 
-    // Streamer name priority: body param → DB field → URL extraction
-    // Never fall back to a hex ID — rather use "the streamer"
-    const rawStreamer = bodyStreamer || dbStreamer || extractStreamerFromUrl(sourceUrl)
-    const streamerName = rawStreamer && !/^[a-f0-9]{8,}$/.test(rawStreamer) ? rawStreamer : ''
-
+    // Name priority: body → DB → URL. Never use a hex ID.
+    const rawName = bodyStreamer || dbStreamer || extractStreamerFromUrl(sourceUrl)
+    const streamerName = rawName && !/^[a-f0-9]{8,}$/.test(rawName) ? rawName : ''
     if (bodyCustomTitle?.trim()) videoTitle = bodyCustomTitle.trim()
 
     const targetPlatforms: string[] = platforms ?? [platform]
     const isAllSocials = targetPlatforms.length > 1
     const results: Record<string, { options: string[]; hook_line: string }> = {}
 
-    await Promise.all(targetPlatforms.map(async (p) => {
-      const prompt = buildPrompt(transcript || videoTitle, tone, p, streamerName, videoTitle, isAllSocials)
-      // Fast mode for All Socials (4 parallel calls) — use faster model to avoid Vercel timeout
-      const raw = await callAI(prompt, isAllSocials)
-      console.log(`[generate] ${p} len=${raw.length} name="${streamerName}" snippet="${raw.slice(0, 60).replace(/\n/g, ' ')}"`)
-
-      if (isAllSocials) {
+    if (isAllSocials) {
+      // All 4 platforms in parallel, split across AIs to distribute load
+      await Promise.all(targetPlatforms.map(async (p) => {
+        const prompt = buildPrompt(transcript || videoTitle, tone, p, streamerName, videoTitle, true)
+        const raw = await callAIForPlatform(prompt, p)
+        console.log(`[generate:all] ${p} len=${raw.length}`)
         results[p] = { options: [raw.trim()], hook_line: '' }
-      } else {
-        results[p] = { options: parseOptions(raw), hook_line: '' }
-      }
-    }))
+      }))
+    } else {
+      // Single platform — race both AIs, use 3 options
+      const prompt = buildPrompt(transcript || videoTitle, tone, platform, streamerName, videoTitle, false)
+      const raw = await callAI(prompt, false)
+      console.log(`[generate:single] ${platform} len=${raw.length} name="${streamerName}"`)
+      results[platform] = { options: parseOptions(raw), hook_line: '' }
+    }
 
     if (targetPlatforms.length === 1) {
       return NextResponse.json({ ...results[targetPlatforms[0]], streamer: streamerName })

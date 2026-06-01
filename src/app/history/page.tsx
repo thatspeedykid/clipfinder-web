@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -62,6 +62,7 @@ export default function HistoryPage() {
   const router = useRouter()
   const supabase = createClient()
   const [token, setToken] = useState('')
+  const tokenRef = useRef<string>('')
   const [jobs, setJobs] = useState<Job[]>([])
   const [totalJobs, setTotalJobs] = useState(0)
   const [page, setPage] = useState(1)
@@ -79,7 +80,7 @@ export default function HistoryPage() {
     if (refreshingUrls.has(clipId)) return
     setRefreshingUrls(prev => new Set([...prev, clipId]))
     try {
-      const res = await fetch(`/api/clips/${clipId}/stream`, { headers: { Authorization: `Bearer ${token}` } })
+      const res = await fetch(`/api/clips/${clipId}/stream`, { headers: { Authorization: `Bearer ${tokenRef.current || token}` } })
       if (res.ok || res.redirected) {
         const freshUrl = res.url
         setJobClips(prev => ({
@@ -101,7 +102,7 @@ export default function HistoryPage() {
   async function downloadClip(fileUrl: string, clipId: string) {
     const downloadUrl = `/api/clips/${clipId}/stream?download=1`
     try {
-      const res = await fetch(downloadUrl, { headers: { Authorization: `Bearer ${token}` } })
+      const res = await fetch(downloadUrl, { headers: { Authorization: `Bearer ${tokenRef.current || token}` } })
       if (!res.ok) throw new Error('fetch failed')
       const blob = await res.blob()
       const a = document.createElement('a')
@@ -116,6 +117,7 @@ export default function HistoryPage() {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) { router.replace('/login'); return }
+      tokenRef.current = session.access_token
       setToken(session.access_token)
     })
   }, [])
@@ -135,7 +137,16 @@ export default function HistoryPage() {
     setLoading(false)
     if (pg === 1) {
       const firstDone = (data ?? []).find(j => j.status === 'done')
-      if (firstDone) setExpandedJob(firstDone.id)
+      if (firstDone && tokenRef.current) {
+        // Load clips directly instead of going through state to avoid race
+        setExpandedJob(firstDone.id)
+        setLoadingClips(firstDone.id)
+        fetch(`/api/jobs/${firstDone.id}`, { headers: { Authorization: `Bearer ${tokenRef.current}` } })
+          .then(r => r.json()).then(d => {
+            setJobClips(prev => ({ ...prev, [firstDone.id]: d.clips ?? [] }))
+            setLoadingClips(null)
+          }).catch(() => setLoadingClips(null))
+      }
     }
   }, [token])
 
@@ -152,10 +163,9 @@ export default function HistoryPage() {
     // Already loaded — just expand
     if (jobClips[jobId]) return
     setLoadingClips(jobId)
-    const res = await fetch(`/api/jobs/${jobId}`, { headers: { Authorization: `Bearer ${token}` } })
+    const res = await fetch(`/api/jobs/${jobId}`, { headers: { Authorization: `Bearer ${tokenRef.current || token}` } })
     if (res.ok) {
       const d = await res.json()
-      // /api/jobs route now returns pre-signed R2 URLs — ready for <video> directly
       setJobClips(prev => ({ ...prev, [jobId]: d.clips ?? [] }))
     }
     setLoadingClips(null)
@@ -278,8 +288,8 @@ export default function HistoryPage() {
                                   <video src={clip.file_url || undefined} controls className="w-full h-full object-contain" style={{ maxHeight: '280px' }}
                                     onError={() => {
                                       // Try to refresh the URL before giving up
-                                      if (clip.storage_path && token) {
-                                        refreshClipUrl(expandedJob!, clip.id)
+                                      if (clip.storage_path && (token || tokenRef.current)) {
+                                        refreshClipUrl(job.id, clip.id)
                                       } else {
                                         setVideoErrors(prev => new Set([...prev, clip.id]))
                                       }
