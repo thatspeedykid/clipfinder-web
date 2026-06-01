@@ -554,7 +554,7 @@ def _analyze_and_update_clip(sb, job_id, user_id, transcript_text, video_title, 
         return []
 
 @app.function(image=image, secrets=secrets, timeout=600, memory=2048, cpu=2.0)
-def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto", extension_clips: list = None, streamer_name: str = "", segments: list = None, is_multi_segment: bool = False, total_duration_sec: float = 0):
+def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto", extension_clips: list = None, streamer_name: str = "", segments: list = None, is_multi_segment: bool = False, total_duration_sec: float = 0, custom_title: str = ""):
     from supabase import create_client
     import requests as req
 
@@ -1284,7 +1284,7 @@ def start(body: dict):
     if not job_id or not source_url or not user_id:
         return {"error": "jobId, url, and userId required"}, 400
 
-    process_video.spawn(job_id, source_url, user_id, mode, extension_clips, streamer_name, segments or [], is_multi_segment, total_duration_sec)
+    process_video.spawn(job_id, source_url, user_id, mode, extension_clips, streamer_name, segments or [], is_multi_segment, total_duration_sec, custom_title)
     return {"success": True, "jobId": job_id}
 
 
