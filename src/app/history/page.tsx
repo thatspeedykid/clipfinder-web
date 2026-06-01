@@ -18,9 +18,14 @@ type Clip = {
 
 const JOBS_PER_PAGE = 5
 
-function hoursLeft(dateStr: string) {
-  const h = Math.ceil((new Date(dateStr).getTime() - Date.now()) / 3600000)
-  return h < 24 ? `${h}h left` : `${Math.ceil(h/24)}d left`
+function timeLeft(dateStr: string): { label: string; urgent: boolean } {
+  const ms = new Date(dateStr).getTime() - Date.now()
+  const h = Math.ceil(ms / 3600000)
+  const d = Math.ceil(ms / 86400000)
+  if (h <= 0) return { label: 'Expired', urgent: true }
+  if (h < 24) return { label: `${h}h left`, urgent: true }
+  if (d === 1) return { label: '1 day left', urgent: true }
+  return { label: `${d} days left`, urgent: d <= 3 }
 }
 
 function getSessionType(job: Job): string {
@@ -315,8 +320,11 @@ export default function HistoryPage() {
                                 <div className="flex items-center gap-3 text-xs text-white/40 mb-4">
                                   {clip.start_ts && <span>⏱ {clip.start_ts} → {clip.end_ts}</span>}
                                   {clip.duration_sec && <span>📏 {Math.round(clip.duration_sec)}s</span>}
-                                  {clip.file_expires_at && !expired && <span className="text-green-400/70">{hoursLeft(clip.file_expires_at)}</span>}
-                                  {expired && <span className="text-red-400/60">Expired</span>}
+                                  {clip.file_expires_at && (() => {
+                                    if (expired) return <span className="text-xs bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full">⏰ Expired</span>
+                                    const t = timeLeft(clip.file_expires_at)
+                                    return <span className={`text-xs px-2 py-0.5 rounded-full ${t.urgent ? 'bg-red-500/20 text-red-400' : 'bg-white/10 text-white/40'}`}>{t.label}</span>
+                                  })()}
                                 </div>
                               </div>
                               <div className="flex gap-2 flex-wrap">

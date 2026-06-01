@@ -16,7 +16,7 @@ type Clip = {
 }
 
 type Platform = 'twitter' | 'instagram' | 'tiktok' | 'youtube'
-type Tone = 'drama' | 'tea' | 'breaking' | 'hype' | 'exaggerate'
+type Tone = 'drama' | 'breaking' | 'hype' | 'exaggerate'
 
 const PLATFORMS = [
   { key: 'twitter' as Platform,   label: 'Twitter/X',  icon: '𝕏',  limit: 280 },
@@ -27,7 +27,6 @@ const PLATFORMS = [
 
 const TONES = [
   { key: 'drama' as Tone,      label: '🔥 Drama' },
-  { key: 'tea' as Tone,        label: '☕ Tea' },
   { key: 'breaking' as Tone,   label: '📰 Breaking' },
   { key: 'hype' as Tone,       label: '💥 Hype' },
   { key: 'exaggerate' as Tone, label: '🤯 Exaggerate' },

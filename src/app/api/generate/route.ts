@@ -14,13 +14,6 @@ You are a streaming drama account with 500k followers. Insider gossip energy.
 - 1-2 emojis MAX, placed for impact not decoration
 - Make the person sound iconic, not evil`,
 
-  tea: `TONE: Calm Tea/Soft Expose (2026)
-Devastatingly factual. Unbothered delivery.
-- Open with a cold fact, zero emotion
-- "So apparently" / "Turns out" / "Friendly reminder that" energy
-- Build like a court case — evidence first, reaction second
-- 1 emoji max. End on unanswered question or cliffhanger`,
-
   breaking: `TONE: Breaking News (2026)
 Journalist covering a live stream beat. Factual but urgent.
 - Start BREAKING: or 🚨 BREAKING:

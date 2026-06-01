@@ -14,7 +14,7 @@ type Quota = { used: number; limit: number; allowed: boolean; activeJobs?: numbe
 
 type PostStudioState = {
   platform: 'twitter' | 'instagram' | 'tiktok' | 'youtube'
-  tone: 'drama' | 'tea' | 'breaking' | 'hype' | 'exaggerate'
+  tone: 'drama' | 'breaking' | 'hype' | 'exaggerate'
   options: string[]
   hook: string
   generating: boolean
@@ -33,7 +33,6 @@ const PLATFORMS = [
 
 const TONES = [
   { key: 'drama', label: '🔥 Drama' },
-  { key: 'tea', label: '☕ Tea' },
   { key: 'breaking', label: '📰 Breaking' },
   { key: 'hype', label: '💥 Hype' },
   { key: 'exaggerate', label: '🤯 Exaggerate' },
@@ -139,6 +138,9 @@ export default function DashboardPage() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved)
+        // Skip restore if user dismissed results this session
+        const dismissed = sessionStorage.getItem(`cf_dismissed_${user.id}`)
+        if (dismissed) { localStorage.removeItem(`cf_active_job_${user.id}`); return }
         // Keep for 30 minutes regardless of status
         if (Date.now() - parsed.savedAt < 60 * 60 * 1000) {
           setJob(parsed.job)
@@ -257,6 +259,7 @@ export default function DashboardPage() {
 
   async function startJob(targetUrl: string) {
     setSubmitting(true); setError(''); setClips([]); setJob(null); setShowChunkOptions(false)
+    if (user) sessionStorage.removeItem(`cf_dismissed_${user.id}`) // allow restore for new job
 
     // Jobs API now handles worker dispatch server-side (WORKER_SECRET is server-only)
     const jobRes = await fetch('/api/jobs', {
@@ -294,7 +297,11 @@ export default function DashboardPage() {
       return
     }
     setJob(null); setClips([]); setOpenStudio(null); setUrl('')
-    if (user) localStorage.removeItem(`cf_active_job_${user.id}`)
+    if (user) {
+      localStorage.removeItem(`cf_active_job_${user.id}`)
+      // Mark as dismissed so restore on refresh doesn't bring it back
+      sessionStorage.setItem(`cf_dismissed_${user.id}`, '1')
+    }
   }
 
   async function cancelJob() {
