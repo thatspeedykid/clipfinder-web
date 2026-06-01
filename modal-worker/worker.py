@@ -659,7 +659,7 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
 
             # Upload combined as full clip only if under 550MB AND flag enabled
             # Size-based limit — a 7:30 clip can be ~450MB (fine), but longer clips get huge
-            save_full = get_flag(sb, "feature_extension_full_clip", False) and combined_size <= 550
+            save_full = get_flag(sb, "feature_extension_full_clip", False) and combined_size <= 600
             if save_full:
                 prefix = streamer_name.capitalize() if streamer_name else "Extension"
                 full_row = [{

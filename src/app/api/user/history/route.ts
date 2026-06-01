@@ -14,34 +14,45 @@ async function r2Delete(storagePath: string): Promise<boolean> {
     return false
   }
   try {
-    const crypto = require('crypto')
     const now = new Date()
-    const date = now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '').slice(0, 15) + 'Z'
-    const dateShort = date.slice(0, 8)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const dateStamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth()+1)}${pad(now.getUTCDate())}`
+    const amzDate   = `${dateStamp}T${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}Z`
+
     const host = `${accountId}.r2.cloudflarestorage.com`
-    const path = `/${bucket}/${storagePath}`
+    const encodedPath = '/' + bucket + '/' + storagePath.split('/').map(encodeURIComponent).join('/')
     const payloadHash = crypto.createHash('sha256').update('').digest('hex')
-    const canonicalHeaders = `host:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${date}\n`
+
+    const canonicalHeaders = `host:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`
     const signedHeaders = 'host;x-amz-content-sha256;x-amz-date'
-    const canonicalRequest = ['DELETE', path, '', canonicalHeaders, signedHeaders, payloadHash].join('\n')
-    const credentialScope = `${dateShort}/auto/s3/aws4_request`
-    const stringToSign = ['AWS4-HMAC-SHA256', date, credentialScope,
+    const canonicalRequest = ['DELETE', encodedPath, '', canonicalHeaders, signedHeaders, payloadHash].join('\n')
+
+    const credentialScope = `${dateStamp}/auto/s3/aws4_request`
+    const stringToSign = ['AWS4-HMAC-SHA256', amzDate, credentialScope,
       crypto.createHash('sha256').update(canonicalRequest).digest('hex')].join('\n')
-    const hmac = (key: Buffer | string, data: string) => crypto.createHmac('sha256', key).update(data).digest()
-    const signingKey = hmac(hmac(hmac(hmac('AWS4' + secretAccessKey, dateShort), 'auto'), 's3'), 'aws4_request')
+
+    const hmac = (key: Buffer | string, data: string): Buffer =>
+      crypto.createHmac('sha256', key).update(data).digest()
+    const signingKey = hmac(hmac(hmac(hmac(Buffer.from('AWS4' + secretAccessKey, 'utf8'), dateStamp), 'auto'), 's3'), 'aws4_request')
     const signature = crypto.createHmac('sha256', signingKey).update(stringToSign).digest('hex')
-    const url = `https://${host}${path}`
+
+    const url = `https://${host}${encodedPath}`
     const res = await fetch(url, {
       method: 'DELETE',
       headers: {
-        Authorization: `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
-        'x-amz-date': date,
+        'Authorization': `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
+        'x-amz-date': amzDate,
         'x-amz-content-sha256': payloadHash,
-        Host: host,
+        'host': host,
       },
     })
     const ok = res.ok || res.status === 204 || res.status === 404
-    console.log(`[r2Delete] ${ok ? '✓' : '✗'} ${res.status} ${storagePath.slice(0, 50)}`)
+    if (!ok) {
+      const body = await res.text().catch(() => '')
+      console.error(`[r2Delete] FAILED ${res.status} ${storagePath.slice(0,50)} — ${body.slice(0,300)}`)
+    } else {
+      console.log(`[r2Delete] ✓ ${res.status} deleted ${storagePath.slice(0,50)}`)
+    }
     return ok
   } catch (e) {
     console.error('[r2Delete] error:', e)
