@@ -417,13 +417,11 @@ def _upload_clip_to_storage(sb, clip_path, user_id, job_id, clip_num, clip_id, s
             ExtraArgs={"ContentType": "video/mp4"}
         )
 
-        # Use public R2 URL (bucket has public access enabled)
-        public_base = os.environ.get("R2_PUBLIC_URL", "").rstrip("/")
-        file_url = f"{public_base}/{storage_path}" if public_base else ""
-
+        # Do NOT store public R2 URL — bucket is private, access goes through /api/clips/[id]/stream
+        # file_url is left blank; the Next.js proxy generates short-lived signed URLs on demand
         if clip_id:
             sb.table("clips").update({
-                "file_url": file_url,
+                "file_url": "",           # intentionally blank — served via proxy
                 "file_expires_at": expires.isoformat(),
                 "file_size_mb": size_mb,
                 "storage_path": storage_path,

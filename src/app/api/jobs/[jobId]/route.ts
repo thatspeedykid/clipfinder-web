@@ -38,12 +38,14 @@ export async function GET(
         .order('score', { ascending: false })
 
       if (data) {
-        // Clips are on Cloudflare R2 with public URLs — file_url is already set correctly.
-        // Do NOT try to generate Supabase signed URLs (wrong storage backend, would wipe file_url).
+        // R2 bucket is PRIVATE — serve all clips through the /api/clips/[id]/stream proxy.
+        // The proxy verifies auth and generates a short-lived pre-signed URL.
+        const baseUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') ?? ''
         clips = data.map(clip => {
           const isExpired = clip.file_expires_at && new Date(clip.file_expires_at) < new Date()
           if (isExpired) return { ...clip, file_url: null }
-          return clip
+          if (!clip.storage_path) return clip
+          return { ...clip, file_url: `${baseUrl}/api/clips/${clip.id}/stream` }
         })
       }
     }

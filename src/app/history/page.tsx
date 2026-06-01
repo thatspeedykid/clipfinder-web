@@ -74,16 +74,18 @@ export default function HistoryPage() {
   const [videoErrors, setVideoErrors] = useState<Set<string>>(new Set())
 
   async function downloadClip(fileUrl: string, clipId: string) {
+    const downloadUrl = `/api/clips/${clipId}/stream?download=1`
     try {
-      const res = await fetch(fileUrl)
+      const res = await fetch(downloadUrl, { headers: { Authorization: `Bearer ${token}` } })
+      if (!res.ok) throw new Error('fetch failed')
       const blob = await res.blob()
       const a = document.createElement('a')
       a.href = URL.createObjectURL(blob)
       a.download = `clip-${clipId.slice(0,8)}.mp4`
       document.body.appendChild(a); a.click()
       document.body.removeChild(a)
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000)
-    } catch { window.open(fileUrl, '_blank') }
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000)
+    } catch { window.open(downloadUrl, '_blank') }
   }
 
   useEffect(() => {

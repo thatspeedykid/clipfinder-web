@@ -305,17 +305,10 @@ export default function ClipDetailPage() {
                   playsInline
                   className="w-full h-full"
                   style={{ maxHeight: '60vh', objectFit: 'contain' }}
-                  onError={async (e) => {
-                    // URL expired mid-session — try to refresh via supabase
+                  onError={() => {
+                    // Proxy URL expired — refresh by re-appending a cache-bust param
                     if (clip.storage_path) {
-                      try {
-                        const { data: signed } = await supabase.storage
-                          .from('clips')
-                          .createSignedUrl(clip.storage_path, 3600)
-                        if (signed?.signedUrl) {
-                          setClip(prev => prev ? { ...prev, file_url: signed.signedUrl } : null)
-                        }
-                      } catch {}
+                      setClip(prev => prev ? { ...prev, file_url: `/api/clips/${prev.id}/stream?t=${Date.now()}` } : null)
                     }
                   }}
                 />
@@ -329,17 +322,18 @@ export default function ClipDetailPage() {
                 </div>
                 <button
                   onClick={async () => {
-                    if (!clip.file_url) return
+                    const downloadUrl = `/api/clips/${clip.id}/stream?download=1`
                     try {
-                      const res = await fetch(clip.file_url)
+                      const res = await fetch(downloadUrl, { headers: { Authorization: `Bearer ${tokenRef.current}` } })
+                      if (!res.ok) throw new Error('failed')
                       const blob = await res.blob()
                       const a = document.createElement('a')
                       a.href = URL.createObjectURL(blob)
                       a.download = `${clip.title ?? 'clip'}.mp4`
                       document.body.appendChild(a); a.click()
                       document.body.removeChild(a)
-                      setTimeout(() => URL.revokeObjectURL(a.href), 5000)
-                    } catch { window.open(clip.file_url, '_blank') }
+                      setTimeout(() => URL.revokeObjectURL(a.href), 10000)
+                    } catch { window.open(downloadUrl, '_blank') }
                   }}
                   className="flex items-center gap-2 bg-[#FF6B00] text-white text-sm font-medium px-5 py-2.5 rounded-xl hover:bg-[#e55f00] transition-colors flex-shrink-0"
                 >
