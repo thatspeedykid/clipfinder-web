@@ -209,24 +209,15 @@ export default function DashboardPage() {
   async function startJob(targetUrl: string) {
     setSubmitting(true); setError(''); setClips([]); setJob(null); setShowChunkOptions(false)
 
+    // Jobs API now handles worker dispatch server-side (WORKER_SECRET is server-only)
     const jobRes = await fetch('/api/jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tokenRef.current}` },
-      body: JSON.stringify({ source_url: targetUrl, mode }),
+      body: JSON.stringify({ source_url: targetUrl, mode, streamerName: streamerName || '' }),
     })
     const jobData = await jobRes.json()
-    if (!jobRes.ok) { setError(jobData.error ?? 'Failed to create job'); setSubmitting(false); return }
-
-    const workerUrl = process.env.NEXT_PUBLIC_MODAL_WORKER_URL
-    if (!workerUrl) { setError('Worker not configured'); setSubmitting(false); return }
-
-    const res = await fetch(workerUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId: jobData.jobId, url: targetUrl, mode, userId: user?.id, authToken: process.env.NEXT_PUBLIC_WORKER_SECRET ?? '', streamerName: streamerName || '' }),
-    })
     setSubmitting(false)
-    if (!res.ok) { const d = await res.json().catch(() => ({})); setError(d.error ?? 'Failed to start'); return }
+    if (!jobRes.ok) { setError(jobData.error ?? 'Failed to start job'); return }
     const newJob: Job = { id: jobData.jobId, status: 'queued', progress: 0, progress_msg: 'Starting...', source_url: targetUrl }
     setJob(newJob)
   }

@@ -525,9 +525,10 @@ def _upload_clips_from_hls(sb, tmp, source_url, clips_data, clip_id_map, job_id,
 
 def _analyze_and_update_clip(sb, job_id, user_id, transcript_text, video_title, streamer_name, mode, clip_id=None, clips_target=3):
     """Run AI analysis, update the full clip record with title/summary, return clips data."""
+    import requests as _req
     app_url = os.environ.get("NEXT_PUBLIC_APP_URL", "").rstrip("/")
     try:
-        analyze_resp = req.post(
+        analyze_resp = _req.post(
             f"{app_url}/api/analyze",
             json={"jobId": job_id, "transcript": transcript_text,
                   "videoTitle": video_title, "mode": mode, "userId": user_id,
@@ -553,7 +554,7 @@ def _analyze_and_update_clip(sb, job_id, user_id, transcript_text, video_title, 
         return []
 
 @app.function(image=image, secrets=secrets, timeout=600, memory=2048, cpu=2.0)
-def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto", extension_clips: list = None, streamer_name: str = "", segments: list = None):
+def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto", extension_clips: list = None, streamer_name: str = "", segments: list = None, is_multi_segment: bool = False, total_duration_sec: float = 0):
     from supabase import create_client
     import requests as req
 
@@ -587,7 +588,10 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
 
         # ── Segments mode: concat multiple Kick clips then run full pipeline ──
         # Check FIRST before HLS detection since vod_url may also be .m3u8
-        if segments and len(segments) > 0:
+        segments = segments or []
+        print(f"[process] is_multi={is_multi_segment}, segments={len(segments)}, total_dur={total_duration_sec}")
+        # Handle single segment same as multi - download HLS directly, skip Kick API
+        if len(segments) >= 1:
             seg_count = len(segments)
             print(f"[segments] {seg_count} Kick clip(s) to process")
             update_job(sb, job_id, "downloading", 10, f"Downloading {seg_count} clip(s)...")
@@ -639,6 +643,20 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
             combined_size = combined_path.stat().st_size / 1024 / 1024
             print(f"[segments] combined: {combined_size:.1f}MB")
 
+            # Calculate combined duration before saving full clip
+            combined_duration = float(total_duration_sec) if total_duration_sec else 0
+            try:
+                probe = subprocess.run(["ffprobe", "-v", "quiet", "-show_entries",
+                    "format=duration", "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(combined_path)], capture_output=True, text=True, timeout=30)
+                probed = float(probe.stdout.strip() or "0")
+                if probed > 0:
+                    combined_duration = probed
+            except:
+                pass
+            if combined_duration <= 0:
+                combined_duration = 90.0  # safe fallback
+
             # Upload combined as full clip if flag enabled
             save_full = get_flag(sb, "feature_extension_full_clip", False)
             if save_full:
@@ -646,9 +664,11 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
                 full_row = [{
                     "job_id": job_id, "user_id": user_id,
                     "title": f"{prefix} — Full clip",
-                    "summary": f"Full concatenated clip from {len(segment_paths)} segments",
-                    "start_ts": "00:00:00", "end_ts": "00:04:30",
-                    "duration_sec": int(combined_size * 8 / 2), "score": 85,
+                    "summary": f"Full {len(segment_paths)}-segment clip from {prefix}'s stream. AI description generating...",
+                    "start_ts": "00:00:00",
+                    "end_ts": f"{int(combined_duration)//3600:02d}:{(int(combined_duration)%3600)//60:02d}:{int(combined_duration)%60:02d}",
+                    "duration_sec": int(combined_duration),
+                    "score": 85,
                 }]
                 sb.table("clips").insert(full_row).execute()
                 full_db = sb.table("clips").select("id").eq("job_id", job_id).order("created_at").limit(1).execute()
@@ -680,22 +700,16 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
                 update_job(sb, job_id, "error", 0, "Transcription failed", {"error_msg": "No transcript"})
                 return
 
-            # Get total duration of combined video
-            combined_duration = 0
-            try:
-                probe = subprocess.run(["ffprobe", "-v", "quiet", "-show_entries",
-                    "format=duration", "-of", "default=noprint_wrappers=1:nokey=1",
-                    str(combined_path)], capture_output=True, text=True, timeout=30)
-                combined_duration = float(probe.stdout.strip() or "0")
-            except:
-                combined_duration = len(segment_paths) * 90
+            # combined_duration already calculated above
 
-            # Scale clips target: 2-3 per 90s, more for longer
-            clips_target = max(2, min(12, int(combined_duration / 90) * 2))
+            # Scale clips target based on duration
+            if combined_duration <= 90:
+                clips_target = 2
+            elif combined_duration <= 180:
+                clips_target = 3
+            else:
+                clips_target = max(3, min(12, int(combined_duration / 90) * 2))
             print(f"[segments] combined duration: {combined_duration:.0f}s → targeting {clips_target} clips")
-
-            # Short clip (≤ 2 min) — just get description, no sub-clips needed
-            is_short = combined_duration <= 130
 
             update_job(sb, job_id, "analyzing", 55, "AI analyzing content...")
 
@@ -706,15 +720,25 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
             clips_data = _analyze_and_update_clip(
                 sb, job_id, user_id, transcript_text,
                 streamer_name or "Extension clip", streamer_name, mode,
-                clip_id=full_clip_id, clips_target=1 if is_short else clips_target
+                clip_id=full_clip_id, clips_target=clips_target
             )
             clip_id_map = {c.get("start_ts", ""): c.get("id", "") for c in clips_data}
+            print(f"[segments] AI found {len(clips_data)} clips to cut")
 
-            if is_short:
-                # Short clip — just show the full clip with description, done
-                print(f"[segments] short clip ({combined_duration:.0f}s) — showing full clip only")
+            # Update full clip with AI-generated description
+            if full_clip_id and clips_data:
+                prefix = streamer_name.capitalize() if streamer_name else "Extension"
+                top_summaries = [c.get("summary","") for c in clips_data[:3] if c.get("summary")]
+                full_summary = " | ".join(top_summaries) if top_summaries else f"Full combined clip from {prefix}'s stream"
+                sb.table("clips").update({
+                    "title": f"{prefix} — Full clip ({int(combined_duration//60)}:{int(combined_duration%60):02d})",
+                    "summary": full_summary[:500],
+                }).eq("id", full_clip_id).execute()
+
+            # If AI found no clips, finish with just the full clip
+            if not clips_data:
+                print(f"[segments] AI returned no clips — done with full clip only")
                 update_job(sb, job_id, "done", 100, "Done! 1 clip ready", {"clips_found": 1})
-                print(f"[done] job {job_id[:8]} — short clip, description only")
                 return
 
             # Cut sub-clips from combined video
@@ -726,6 +750,10 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
                 end_ts = clip.get("end_ts", "00:01:00")
                 start_sec = ts_to_seconds(start_ts)
                 duration = max(CLIP_MIN_SEC, min(CLIP_MAX_SEC, ts_to_seconds(end_ts) - start_sec))
+                # Skip clips that are basically the entire video (>90% of total AND >90s)
+                if combined_duration > 0 and duration > combined_duration * 0.9 and duration > 90:
+                    print(f"[segments] skipping sub-clip {i+1} — same as full clip ({duration:.0f}s vs {combined_duration:.0f}s combined)")
+                    return
                 clip_path = tmp / f"subclip_{i+1}.mp4"
                 result = subprocess.run([
                     "ffmpeg", "-ss", str(start_sec), "-i", str(combined_path),
@@ -747,8 +775,9 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
             with ThreadPoolExecutor(max_workers=3) as executor:
                 list(executor.map(cut_segment_clip, enumerate(clips_data)))
 
-            update_job(sb, job_id, "done", 100, f"Done! {len(clips_data)} clips ready", {"clips_found": len(clips_data)})
-            print(f"[done] job {job_id[:8]} — segments mode, {len(clips_data)} clips")
+            total_clips = 1 + len(clips_data)  # full clip + sub-clips
+            update_job(sb, job_id, "done", 100, f"Done! {total_clips} clips ready", {"clips_found": total_clips})
+            print(f"[done] job {job_id[:8]} — segments mode, {total_clips} clips ({len(clips_data)} sub-clips + full)")
             return
 
         # Detect HLS stream URLs from browser extension
@@ -1271,7 +1300,11 @@ def start(body: dict):
     auth_token = body.get("authToken", "")
     extension_clips = body.get("extensionClips", None)  # pre-defined timestamps from browser extension
     streamer_name = body.get("streamerName", "") or body.get("streamer_name", "")  # from extension or dashboard
-    segments = body.get("segments", None)  # multi-segment concat mode
+    segments = body.get("segments", None) or []  # multi-segment concat mode
+    is_multi_segment = body.get("is_multi_segment", False)
+    total_duration_sec = body.get("total_duration_sec", 0)
+    segment_count = body.get("segment_count", 1)
+    print(f"[start] is_multi_segment={is_multi_segment}, segment_count={segment_count}, segments_len={len(segments)}")
     print(f"[start] received keys: {list(body.keys())}")
     print(f"[start] segments={segments}, extension_clips={bool(extension_clips)}, source_url={str(source_url)[:60]}")
 
@@ -1281,7 +1314,7 @@ def start(body: dict):
     if not job_id or not source_url or not user_id:
         return {"error": "jobId, url, and userId required"}, 400
 
-    process_video.spawn(job_id, source_url, user_id, mode, extension_clips, streamer_name, segments)
+    process_video.spawn(job_id, source_url, user_id, mode, extension_clips, streamer_name, segments or [], is_multi_segment, total_duration_sec)
     return {"success": True, "jobId": job_id}
 
 

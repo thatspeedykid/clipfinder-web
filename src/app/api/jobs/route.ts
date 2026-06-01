@@ -1,9 +1,11 @@
 // src/app/api/jobs/route.ts
-// POST — creates a new job record in Supabase before kicking off Modal worker
+// POST — creates a new job record in Supabase and kicks off Modal worker server-side
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
 import { checkQuota } from '@/lib/quota'
+
+export const maxDuration = 30
 
 export async function POST(req: NextRequest) {
   try {
@@ -46,6 +48,42 @@ export async function POST(req: NextRequest) {
     if (jobError || !job) {
       console.error('[jobs POST] insert error:', jobError)
       return NextResponse.json({ error: 'Failed to create job' }, { status: 500 })
+    }
+
+    // Kick off Modal worker server-side (WORKER_SECRET stays server-only)
+    const workerUrl = process.env.MODAL_WORKER_URL
+    const workerSecret = process.env.WORKER_SECRET
+    if (!workerUrl) {
+      console.error('[jobs POST] MODAL_WORKER_URL not set')
+      return NextResponse.json({ error: 'Worker not configured' }, { status: 500 })
+    }
+
+    const workerPayload: Record<string, unknown> = {
+      jobId: job.id,
+      url: source_url,
+      mode,
+      userId: user.id,
+      authToken: workerSecret ?? '',
+      streamerName: body.streamerName ?? '',
+    }
+
+    // Pass through segments if provided (extension multi-segment mode)
+    if (body.segments) workerPayload.segments = body.segments
+    if (body.is_multi_segment) workerPayload.is_multi_segment = body.is_multi_segment
+    if (body.total_duration_sec) workerPayload.total_duration_sec = body.total_duration_sec
+
+    const workerRes = await fetch(workerUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(workerPayload),
+    })
+
+    if (!workerRes.ok) {
+      const errBody = await workerRes.json().catch(() => ({}))
+      console.error('[jobs POST] worker error:', workerRes.status, errBody)
+      // Clean up the job row since worker failed to start
+      await supabase.from('jobs').delete().eq('id', job.id)
+      return NextResponse.json({ error: errBody.error ?? 'Failed to start worker' }, { status: 502 })
     }
 
     return NextResponse.json({ success: true, jobId: job.id })
