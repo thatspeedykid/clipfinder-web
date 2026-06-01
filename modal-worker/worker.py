@@ -523,15 +523,17 @@ def _upload_clips_from_hls(sb, tmp, source_url, clips_data, clip_id_map, job_id,
 
 
 
-def _analyze_and_update_clip(sb, job_id, user_id, transcript_text, video_title, streamer_name, mode, clip_id=None, clips_target=3):
+def _analyze_and_update_clip(sb, job_id, user_id, transcript_text, video_title, streamer_name, mode, clip_id=None, clips_target=3, custom_title=""):
     """Run AI analysis, update the full clip record with title/summary, return clips data."""
     import requests as _req
     app_url = os.environ.get("NEXT_PUBLIC_APP_URL", "").rstrip("/")
+    # If user provided a custom title, prepend it to videoTitle as context for the AI
+    effective_title = f"{custom_title} — {video_title}" if custom_title and video_title else custom_title or video_title
     try:
         analyze_resp = _req.post(
             f"{app_url}/api/analyze",
             json={"jobId": job_id, "transcript": transcript_text,
-                  "videoTitle": video_title, "mode": mode, "userId": user_id,
+                  "videoTitle": effective_title, "mode": mode, "userId": user_id,
                   "names": streamer_name, "clipsTarget": clips_target},
             headers={"Authorization": f"Bearer {os.environ['WORKER_SECRET']}", "Content-Type": "application/json"},
             timeout=120,
@@ -721,7 +723,7 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
             clips_data = _analyze_and_update_clip(
                 sb, job_id, user_id, transcript_text,
                 streamer_name or "Extension clip", streamer_name, mode,
-                clip_id=full_clip_id, clips_target=clips_target
+                clip_id=full_clip_id, clips_target=clips_target, custom_title=custom_title
             )
             clip_id_map = {c.get("start_ts", ""): c.get("id", "") for c in clips_data}
             print(f"[segments] AI found {len(clips_data)} clips to cut")
@@ -1269,6 +1271,7 @@ def start(body: dict):
     auth_token = body.get("authToken", "")
     extension_clips = body.get("extensionClips", None)  # pre-defined timestamps from browser extension
     streamer_name = body.get("streamerName", "") or body.get("streamer_name", "")  # from extension or dashboard
+    custom_title = body.get("customTitle", "") or body.get("custom_title", "")  # user-set title hint for AI
     segments = body.get("segments", None) or []  # multi-segment concat mode
     is_multi_segment = body.get("is_multi_segment", False)
     total_duration_sec = body.get("total_duration_sec", 0)

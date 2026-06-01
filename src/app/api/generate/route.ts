@@ -215,7 +215,7 @@ export async function POST(req: NextRequest) {
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const body = await req.json()
-    const { clipId, platform = 'twitter', tone = 'drama', streamerName: bodyStreamer, customContext = '', platforms } = body
+    const { clipId, platform = 'twitter', tone = 'drama', streamerName: bodyStreamer, customContext = '', platforms, customTitle: bodyCustomTitle } = body
 
     // Fetch clip + transcript
     const { data: clip } = await supabase.from('clips').select('id, title, summary, job_id').eq('id', clipId).single()
@@ -232,6 +232,8 @@ export async function POST(req: NextRequest) {
     }
 
     const streamerName = bodyStreamer || extractStreamerFromUrl(sourceUrl) || ''
+    // Use user-provided title if set — helps AI generate better targeted content
+    if (bodyCustomTitle?.trim()) videoTitle = bodyCustomTitle.trim()
     const hookLine = extractHookLine(transcript)
 
     const targetPlatforms: string[] = platforms ?? [platform]

@@ -18,7 +18,10 @@ type PostStudioState = {
   options: string[]
   hook: string
   generating: boolean
+  generatingPlatform: string | null  // which platform is regenerating solo
   copied: number | null
+  allSocials: Record<string, { options: string[]; regen: boolean }> | null  // all-socials results
+  allSocialsGenerating: boolean
 }
 
 const PLATFORMS = [
@@ -95,6 +98,7 @@ export default function DashboardPage() {
   const [openStudio, setOpenStudio] = useState<string | null>(null)
   const [openPreview, setOpenPreview] = useState<string | null>(null)
   const [studios, setStudios] = useState<Record<string, PostStudioState>>({})
+  const [editableClips, setEditableClips] = useState<Record<string, { title: string; summary: string; editing: boolean; saving: boolean }>>({})
   const [vodDuration, setVodDuration] = useState<number | null>(null)
   const [showChunkOptions, setShowChunkOptions] = useState(false)
   const pollRef = useRef<NodeJS.Timeout | null>(null)
@@ -138,9 +142,18 @@ export default function DashboardPage() {
           // Only restore URL if job is still active (not done/error)
           const activeStatuses = ['queued','downloading','transcribing','analyzing','cutting']
           if (parsed.url && activeStatuses.includes(parsed.job?.status)) setUrl(parsed.url)
-          // Restore clips too
-          if (parsed.clips?.length > 0) setClips(parsed.clips)
           if (parsed.openStudio) setOpenStudio(parsed.openStudio)
+          // For done jobs: always re-fetch clips fresh from server (localStorage clips may be stale)
+          if (parsed.job?.status === 'done' && parsed.job?.id) {
+            // Re-fetch fresh after auth token is confirmed ready (slight delay ensures token is set)
+            setTimeout(() => {
+              if (!tokenRef.current) return
+              fetch(`/api/jobs/${parsed.job.id}`, { headers: { Authorization: `Bearer ${tokenRef.current}` } })
+                .then(r => r.json()).then(d => { if (d.clips?.length > 0) setClips(d.clips) }).catch(() => {})
+            }, 500)
+          } else if (parsed.clips?.length > 0) {
+            setClips(parsed.clips)
+          }
         } else {
           localStorage.removeItem(`cf_active_job_${user.id}`)
         }
@@ -253,33 +266,105 @@ export default function DashboardPage() {
     }
   }
 
-  async function generatePost(clipId: string) {
-    const studio = studios[clipId] ?? { platform: 'twitter', tone: 'drama', options: [], hook: '', generating: false, copied: null }
-    setStudios(prev => ({ ...prev, [clipId]: { ...studio, generating: true, options: [], hook: '' } }))
-    try {
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tokenRef.current}` },
-        body: JSON.stringify({ clipId, platform: studio.platform, tone: studio.tone, streamerName: streamerName || '' }),
-      })
-      const data = await res.json()
-      setStudios(prev => ({ ...prev, [clipId]: { ...prev[clipId], generating: false, options: data.options ?? [], hook: data.hook_line ?? '' } }))
-    } catch {
-      setStudios(prev => ({ ...prev, [clipId]: { ...prev[clipId], generating: false } }))
-    }
-  }
+  const DEFAULT_STUDIO = (): PostStudioState => ({
+    platform: 'twitter', tone: 'drama', options: [], hook: '',
+    generating: false, generatingPlatform: null, copied: null,
+    allSocials: null, allSocialsGenerating: false,
+  })
 
   function updateStudio(clipId: string, updates: Partial<PostStudioState>) {
-    setStudios(prev => ({
-      ...prev,
-      [clipId]: { ...(prev[clipId] ?? { platform: 'twitter', tone: 'drama', options: [], hook: '', generating: false, copied: null }), ...updates }
-    }))
+    setStudios(prev => ({ ...prev, [clipId]: { ...(prev[clipId] ?? DEFAULT_STUDIO()), ...updates } }))
   }
 
   async function copyToClipboard(clipId: string, text: string, index: number) {
     await navigator.clipboard.writeText(text)
     updateStudio(clipId, { copied: index })
     setTimeout(() => updateStudio(clipId, { copied: null }), 2000)
+  }
+
+  function getClipTitle(clip: Clip): string {
+    return editableClips[clip.id]?.title ?? clip.title ?? ''
+  }
+
+  async function generatePost(clipId: string, clip: Clip) {
+    const studio = studios[clipId] ?? DEFAULT_STUDIO()
+    updateStudio(clipId, { generating: true, options: [], hook: '', allSocials: null })
+    try {
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tokenRef.current}` },
+        body: JSON.stringify({ clipId, platform: studio.platform, tone: studio.tone, streamerName: streamerName || '', customTitle: getClipTitle(clip) }),
+      })
+      const data = await res.json()
+      updateStudio(clipId, { generating: false, options: data.options ?? [], hook: data.hook_line ?? '' })
+    } catch {
+      updateStudio(clipId, { generating: false })
+    }
+  }
+
+  async function regenOption(clipId: string, clip: Clip, platform: string, optionIndex: number) {
+    updateStudio(clipId, { generatingPlatform: `${platform}-${optionIndex}` })
+    try {
+      const studio = studios[clipId] ?? DEFAULT_STUDIO()
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tokenRef.current}` },
+        body: JSON.stringify({ clipId, platform, tone: studio.tone, streamerName: streamerName || '', customTitle: getClipTitle(clip) }),
+      })
+      const data = await res.json()
+      if (platform === (studios[clipId]?.platform ?? 'twitter') && !studios[clipId]?.allSocials) {
+        const newOptions = [...(studios[clipId]?.options ?? [])]
+        if (data.options?.[0]) newOptions[optionIndex] = data.options[0]
+        updateStudio(clipId, { generatingPlatform: null, options: newOptions })
+      } else {
+        setStudios(prev => {
+          const cur = prev[clipId] ?? DEFAULT_STUDIO()
+          const allSocials = { ...(cur.allSocials ?? {}) }
+          const updated = [...(allSocials[platform]?.options ?? [])]
+          if (data.options?.[0]) updated[optionIndex] = data.options[0]
+          allSocials[platform] = { options: updated, regen: false }
+          return { ...prev, [clipId]: { ...cur, generatingPlatform: null, allSocials } }
+        })
+      }
+    } catch {
+      updateStudio(clipId, { generatingPlatform: null })
+    }
+  }
+
+  async function generateAllSocials(clipId: string, clip: Clip) {
+    const studio = studios[clipId] ?? DEFAULT_STUDIO()
+    updateStudio(clipId, { allSocialsGenerating: true, allSocials: null, options: [], hook: '' })
+    try {
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tokenRef.current}` },
+        body: JSON.stringify({ clipId, platforms: ['twitter', 'instagram', 'tiktok', 'youtube'], tone: studio.tone, streamerName: streamerName || '', customTitle: getClipTitle(clip) }),
+      })
+      const data = await res.json()
+      const allSocials: Record<string, { options: string[]; regen: boolean }> = {}
+      for (const p of ['twitter', 'instagram', 'tiktok', 'youtube']) {
+        allSocials[p] = { options: data.platforms?.[p]?.options ?? [], regen: false }
+      }
+      updateStudio(clipId, { allSocialsGenerating: false, allSocials, hook: data.platforms?.twitter?.hook_line ?? '' })
+    } catch {
+      updateStudio(clipId, { allSocialsGenerating: false })
+    }
+  }
+
+  async function saveClipEdit(clipId: string) {
+    const edit = editableClips[clipId]
+    if (!edit) return
+    setEditableClips(prev => ({ ...prev, [clipId]: { ...prev[clipId], saving: true } }))
+    try {
+      await fetch(`/api/clips/${clipId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${tokenRef.current}` },
+        body: JSON.stringify({ title: edit.title, summary: edit.summary }),
+      })
+      setClips(prev => prev.map(c => c.id === clipId ? { ...c, title: edit.title, summary: edit.summary } : c))
+    } finally {
+      setEditableClips(prev => ({ ...prev, [clipId]: { ...prev[clipId], saving: false, editing: false } }))
+    }
   }
 
   const isJobActive = job && ACTIVE_STATUSES.includes(job.status)
@@ -482,12 +567,43 @@ export default function DashboardPage() {
                       <div className="flex-1 p-5 flex flex-col justify-between">
                         <div>
                           <div className="flex items-start justify-between gap-3 mb-2">
-                            <Link href={`/clips/${clip.id}`} className="font-semibold text-base leading-snug hover:text-[#FF6B00] transition-colors">
-                              {clip.title ?? 'Untitled clip'}
-                            </Link>
-                            <span className="text-xs bg-[#FF6B00]/20 text-[#FF6B00] px-2 py-1 rounded-full whitespace-nowrap flex-shrink-0 font-medium">Score {clip.score ?? '?'}/10</span>
+                            {editableClips[clip.id]?.editing ? (
+                              <input
+                                autoFocus
+                                value={editableClips[clip.id].title}
+                                onChange={e => setEditableClips(prev => ({ ...prev, [clip.id]: { ...prev[clip.id], title: e.target.value } }))}
+                                className="flex-1 bg-white/10 border border-[#FF6B00]/50 rounded-lg px-3 py-1.5 text-sm font-semibold text-white focus:outline-none"
+                              />
+                            ) : (
+                              <Link href={`/clips/${clip.id}`} className="font-semibold text-base leading-snug hover:text-[#FF6B00] transition-colors">
+                                {editableClips[clip.id]?.title ?? clip.title ?? 'Untitled clip'}
+                              </Link>
+                            )}
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <span className="text-xs bg-[#FF6B00]/20 text-[#FF6B00] px-2 py-1 rounded-full font-medium">Score {clip.score ?? '?'}/10</span>
+                              {editableClips[clip.id]?.editing ? (
+                                <button onClick={() => saveClipEdit(clip.id)} disabled={editableClips[clip.id]?.saving}
+                                  className="text-xs bg-green-500/20 text-green-400 border border-green-500/30 px-2 py-1 rounded-lg hover:bg-green-500/30">
+                                  {editableClips[clip.id]?.saving ? '...' : '✓ Save'}
+                                </button>
+                              ) : (
+                                <button onClick={() => setEditableClips(prev => ({ ...prev, [clip.id]: { title: clip.title ?? '', summary: clip.summary ?? '', editing: true, saving: false } }))}
+                                  className="text-xs text-white/30 hover:text-white/60 px-2 py-1 rounded-lg hover:bg-white/5">
+                                  ✏️ Edit
+                                </button>
+                              )}
+                            </div>
                           </div>
-                          <p className="text-white/50 text-sm mb-3 leading-relaxed">{clip.summary}</p>
+                          {editableClips[clip.id]?.editing ? (
+                            <textarea
+                              value={editableClips[clip.id].summary}
+                              onChange={e => setEditableClips(prev => ({ ...prev, [clip.id]: { ...prev[clip.id], summary: e.target.value } }))}
+                              rows={3}
+                              className="w-full bg-white/10 border border-[#FF6B00]/30 rounded-lg px-3 py-2 text-sm text-white/80 focus:outline-none mb-3 resize-none"
+                            />
+                          ) : (
+                            <p className="text-white/50 text-sm mb-3 leading-relaxed">{editableClips[clip.id]?.summary ?? clip.summary}</p>
+                          )}
                           <div className="flex items-center gap-3 text-xs text-white/40 mb-4">
                             {clip.start_ts && <span>⏱ {clip.start_ts} → {clip.end_ts}</span>}
                             <span>📏 {Math.round(clip.duration_sec ?? 0)}s</span>
@@ -510,7 +626,11 @@ export default function DashboardPage() {
                     </div>
 
                     {/* Post Bridge */}
-                    {isOpen && (
+                    {isOpen && (() => {
+                      const PLAT_LABELS: Record<string, string> = { twitter: '𝕏 Twitter/X', instagram: '📸 Instagram', tiktok: '🎵 TikTok', youtube: '▶ YT Shorts' }
+                      const PLAT_LIMITS: Record<string, number> = { twitter: 280, instagram: 2200, tiktok: 150, youtube: 5000 }
+                      const OPTION_LABELS = ['🔥 Hot Take', '💬 Pull Quote', '📣 Announcement']
+                      return (
                       <div className="border-t border-white/10 bg-black/30 p-5">
                         {studio.hook && (
                           <div className="bg-[#FF6B00]/5 border border-[#FF6B00]/20 rounded-xl px-4 py-3 mb-4">
@@ -518,55 +638,124 @@ export default function DashboardPage() {
                             <p className="text-sm text-white/80 italic">"{studio.hook}"</p>
                           </div>
                         )}
-                        <div className="flex gap-2 mb-3 flex-wrap">
-                          {PLATFORMS.map(p => (
-                            <button key={p.key}
-                              onClick={() => updateStudio(clip.id, { platform: p.key as PostStudioState['platform'], options: [], hook: '' })}
-                              className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${studio.platform === p.key ? 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30' : 'bg-white/5 text-white/50 border border-white/10 hover:bg-white/10'}`}>
-                              {p.icon} {p.label}
-                            </button>
-                          ))}
-                        </div>
+                        {/* Tone selector */}
                         <div className="flex gap-2 mb-4 flex-wrap">
                           {TONES.map(t => (
                             <button key={t.key}
-                              onClick={() => updateStudio(clip.id, { tone: t.key as PostStudioState['tone'], options: [], hook: '' })}
+                              onClick={() => updateStudio(clip.id, { tone: t.key as PostStudioState['tone'], options: [], hook: '', allSocials: null })}
                               className={`text-xs px-3 py-1.5 rounded-lg transition-colors ${studio.tone === t.key ? 'bg-white/20 text-white border border-white/20' : 'bg-white/5 text-white/40 border border-white/10 hover:bg-white/10'}`}>
                               {t.label}
                             </button>
                           ))}
                         </div>
-                        {studio.options.length === 0 && (
-                          <button onClick={() => generatePost(clip.id)} disabled={studio.generating}
-                            className="w-full py-2.5 bg-[#FF6B00] text-white text-sm font-medium rounded-xl hover:bg-[#e55f00] disabled:opacity-50 mb-3">
-                            {studio.generating ? '✨ Generating 3 options...' : '✨ Generate posts'}
-                          </button>
+
+                        {/* Action buttons row */}
+                        {!studio.allSocials && (
+                          <div className="flex gap-2 mb-4 flex-wrap">
+                            {PLATFORMS.map(p => (
+                              <button key={p.key}
+                                onClick={() => { updateStudio(clip.id, { platform: p.key as PostStudioState['platform'], options: [], hook: '', allSocials: null }); generatePost(clip.id, clip) }}
+                                disabled={studio.generating || studio.allSocialsGenerating}
+                                className={`text-xs px-3 py-1.5 rounded-lg transition-colors border disabled:opacity-50 ${studio.platform === p.key && studio.options.length > 0 ? 'bg-[#FF6B00]/20 text-[#FF6B00] border-[#FF6B00]/30' : 'bg-white/5 text-white/50 border-white/10 hover:bg-white/10'}`}>
+                                {p.icon} {p.label}
+                              </button>
+                            ))}
+                            <button onClick={() => generateAllSocials(clip.id, clip)} disabled={studio.generating || studio.allSocialsGenerating}
+                              className="text-xs px-3 py-1.5 rounded-lg bg-[#FF6B00] text-white font-medium hover:bg-[#e55f00] disabled:opacity-50 transition-colors">
+                              {studio.allSocialsGenerating ? '✨ Generating all...' : '🌐 All Socials'}
+                            </button>
+                          </div>
                         )}
-                        {studio.options.length > 0 && (
+
+                        {/* Single platform results */}
+                        {studio.options.length > 0 && !studio.allSocials && (
                           <div className="space-y-3">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs text-white/40">{PLAT_LABELS[studio.platform] ?? studio.platform}</span>
+                              <button onClick={() => generatePost(clip.id, clip)} disabled={studio.generating}
+                                className="text-xs text-white/30 hover:text-white/60 disabled:opacity-50">
+                                {studio.generating ? 'Regenerating...' : '↺ Regenerate all'}
+                              </button>
+                            </div>
                             {studio.options.map((option, i) => (
                               <div key={i} className="bg-white/5 border border-white/10 rounded-xl p-4">
                                 <div className="flex items-center justify-between mb-2">
-                                  <span className="text-xs text-white/40 font-medium">
-                                    {i === 0 ? '🔥 Hot Take' : i === 1 ? '💬 Pull Quote' : '📣 Announcement'}
-                                  </span>
-                                  <span className="text-xs text-white/20">{option.length}/{PLATFORMS.find(p => p.key === studio.platform)?.limit ?? 280}</span>
+                                  <span className="text-xs text-white/40 font-medium">{OPTION_LABELS[i] ?? `Option ${i+1}`}</span>
+                                  <span className="text-xs text-white/20">{option.length}/{PLAT_LIMITS[studio.platform] ?? 280}</span>
                                 </div>
                                 <p className="text-sm text-white/80 whitespace-pre-wrap leading-relaxed">{option}</p>
-                                <button onClick={() => copyToClipboard(clip.id, option, i)}
-                                  className={`mt-3 w-full text-xs py-2 rounded-lg transition-colors ${studio.copied === i ? 'bg-green-500/20 text-green-400' : 'bg-white/10 text-white/50 hover:bg-white/20'}`}>
-                                  {studio.copied === i ? '✓ Copied!' : '📋 Copy'}
-                                </button>
+                                <div className="flex gap-2 mt-3">
+                                  <button onClick={() => copyToClipboard(clip.id, option, i)}
+                                    className={`flex-1 text-xs py-2 rounded-lg transition-colors ${studio.copied === i ? 'bg-green-500/20 text-green-400' : 'bg-white/10 text-white/50 hover:bg-white/20'}`}>
+                                    {studio.copied === i ? '✓ Copied!' : '📋 Copy'}
+                                  </button>
+                                  <button onClick={() => regenOption(clip.id, clip, studio.platform, i)}
+                                    disabled={studio.generatingPlatform === `${studio.platform}-${i}`}
+                                    className="text-xs py-2 px-3 rounded-lg bg-white/5 text-white/40 hover:bg-white/10 disabled:opacity-50 border border-white/10">
+                                    {studio.generatingPlatform === `${studio.platform}-${i}` ? '...' : '↺'}
+                                  </button>
+                                </div>
                               </div>
                             ))}
-                            <button onClick={() => generatePost(clip.id)} disabled={studio.generating}
-                              className="w-full text-xs py-2 rounded-xl bg-white/5 text-white/40 border border-white/10 hover:bg-white/10 disabled:opacity-50">
-                              {studio.generating ? 'Regenerating...' : '↺ Regenerate all 3'}
+                            <button onClick={() => updateStudio(clip.id, { options: [], allSocials: null })}
+                              className="w-full text-xs py-2 rounded-xl bg-white/5 text-white/30 border border-white/10 hover:bg-white/10">
+                              ← Back to platform picker
+                            </button>
+                          </div>
+                        )}
+
+                        {/* All Socials panel */}
+                        {studio.allSocials && (
+                          <div className="space-y-5">
+                            {(['twitter', 'instagram', 'tiktok', 'youtube'] as const).map(p => {
+                              const platData = studio.allSocials![p]
+                              const platLimit = { twitter: 280, instagram: 2200, tiktok: 150, youtube: 5000 }[p]
+                              const platLabel = { twitter: '𝕏 Twitter/X', instagram: '📸 Instagram', tiktok: '🎵 TikTok', youtube: '▶ YT Shorts' }[p]
+                              const OPTION_LABELS = ['🔥 Hot Take', '💬 Pull Quote', '📣 Announcement']
+                              return (
+                                <div key={p} className="bg-white/3 border border-white/10 rounded-xl overflow-hidden">
+                                  <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/10 bg-white/5">
+                                    <span className="text-xs font-semibold text-white/70">{platLabel}</span>
+                                    <button onClick={() => regenOption(clip.id, clip, p, 0)}
+                                      disabled={studio.generatingPlatform?.startsWith(p) ?? false}
+                                      className="text-xs text-white/30 hover:text-white/60 disabled:opacity-50">
+                                      {studio.generatingPlatform?.startsWith(p) ? '↺ Generating...' : '↺ Regen all'}
+                                    </button>
+                                  </div>
+                                  <div className="p-4 space-y-3">
+                                    {(platData?.options ?? []).map((option, i) => (
+                                      <div key={i} className="bg-white/5 rounded-lg p-3">
+                                        <div className="flex items-center justify-between mb-1.5">
+                                          <span className="text-xs text-white/30">{OPTION_LABELS[i] ?? `Option ${i+1}`}</span>
+                                          <span className="text-xs text-white/20">{option.length}/{platLimit}</span>
+                                        </div>
+                                        <p className="text-sm text-white/80 whitespace-pre-wrap leading-relaxed mb-2">{option}</p>
+                                        <div className="flex gap-2">
+                                          <button onClick={() => { navigator.clipboard.writeText(option); updateStudio(clip.id, { copied: i * 10 + ['twitter','instagram','tiktok','youtube'].indexOf(p) }) }}
+                                            className="flex-1 text-xs py-1.5 rounded-lg bg-white/10 text-white/50 hover:bg-white/20">
+                                            📋 Copy
+                                          </button>
+                                          <button onClick={() => regenOption(clip.id, clip, p, i)}
+                                            disabled={studio.generatingPlatform === `${p}-${i}`}
+                                            className="text-xs py-1.5 px-3 rounded-lg bg-white/5 text-white/40 hover:bg-white/10 disabled:opacity-50 border border-white/10">
+                                            {studio.generatingPlatform === `${p}-${i}` ? '...' : '↺'}
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )
+                            })}
+                            <button onClick={() => updateStudio(clip.id, { allSocials: null, options: [] })}
+                              className="w-full text-xs py-2 rounded-xl bg-white/5 text-white/30 border border-white/10 hover:bg-white/10">
+                              ← Back to platform picker
                             </button>
                           </div>
                         )}
                       </div>
-                    )}
+                      )
+                    })()}
                   </div>
                 )
               })}
