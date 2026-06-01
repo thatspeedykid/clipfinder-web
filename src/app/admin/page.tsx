@@ -151,9 +151,9 @@ export default function AdminPage() {
     toast(`${key} ${enabled ? 'enabled' : 'disabled'}`)
   }
 
-  async function saveKey(key: string) {
+  async function saveKey(key: string, value?: string) {
     setSaving(true)
-    await authFetch('/api/admin/config', { method: 'POST', body: JSON.stringify({ key, value: editValue }) })
+    await authFetch('/api/admin/config', { method: 'POST', body: JSON.stringify({ key, value: value ?? editValue }) })
     setSaving(false); setEditingKey(null); setEditValue(''); loadConfig()
   }
 
@@ -583,7 +583,7 @@ export default function AdminPage() {
                               className="flex-1 bg-white/5 border border-white/20 rounded-lg px-3 py-1.5 text-xs text-white placeholder-white/30 focus:outline-none focus:border-[#FF6B00]" />
                             <button onClick={async () => {
                               if (!newKeyValue) return
-                              await saveKey(nextKey)
+                              await saveKey(nextKey, newKeyValue)
                               setAddingKey(null); setNewKeyValue('')
                             }} disabled={saving || !newKeyValue}
                               className="text-xs bg-[#FF6B00] text-white px-3 py-1.5 rounded-lg disabled:opacity-50">{saving ? '...' : 'Save'}</button>
