@@ -73,6 +73,19 @@ export default function HistoryPage() {
   const [clearing, setClearing] = useState(false)
   const [videoErrors, setVideoErrors] = useState<Set<string>>(new Set())
 
+  async function downloadClip(fileUrl: string, clipId: string) {
+    try {
+      const res = await fetch(fileUrl)
+      const blob = await res.blob()
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `clip-${clipId.slice(0,8)}.mp4`
+      document.body.appendChild(a); a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000)
+    } catch { window.open(fileUrl, '_blank') }
+  }
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) { router.replace('/login'); return }
@@ -261,7 +274,7 @@ export default function HistoryPage() {
                                   🎬 Open clip
                                 </Link>
                                 {clip.file_url && !expired && (
-                                  <a href={clip.file_url} download className="text-xs bg-white/10 text-white/60 hover:bg-white/20 px-3 py-2 rounded-lg">⬇️ Download</a>
+                                  <button onClick={() => downloadClip(clip.file_url!, clip.id)} className="text-xs bg-white/10 text-white/60 hover:bg-white/20 px-3 py-2 rounded-lg">⬇️ Download</button>
                                 )}
                                 <button onClick={() => setOpenStudio(isOpen ? null : clip.id)}
                                   className={`text-xs px-3 py-2 rounded-lg font-medium transition-colors ${isOpen ? 'bg-[#FF6B00] text-white' : 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30 hover:bg-[#FF6B00]/30'}`}>

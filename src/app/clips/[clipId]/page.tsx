@@ -327,13 +327,24 @@ export default function ClipDetailPage() {
                     <p className="text-xs text-white/40 mt-0.5">Expires in {daysLeft(clip.file_expires_at)}</p>
                   )}
                 </div>
-                <a
-                  href={clip.file_url}
-                  download={`${clip.title ?? 'clip'}.mp4`}
+                <button
+                  onClick={async () => {
+                    if (!clip.file_url) return
+                    try {
+                      const res = await fetch(clip.file_url)
+                      const blob = await res.blob()
+                      const a = document.createElement('a')
+                      a.href = URL.createObjectURL(blob)
+                      a.download = `${clip.title ?? 'clip'}.mp4`
+                      document.body.appendChild(a); a.click()
+                      document.body.removeChild(a)
+                      setTimeout(() => URL.revokeObjectURL(a.href), 5000)
+                    } catch { window.open(clip.file_url, '_blank') }
+                  }}
                   className="flex items-center gap-2 bg-[#FF6B00] text-white text-sm font-medium px-5 py-2.5 rounded-xl hover:bg-[#e55f00] transition-colors flex-shrink-0"
                 >
                   ⬇️ Download
-                </a>
+                </button>
               </div>
             </div>
           ) : clip.storage_path ? (

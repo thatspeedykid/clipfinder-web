@@ -88,8 +88,10 @@ export default function DashboardPage() {
   const [url, setUrl] = useState('')
   const [streamerName, setStreamerName] = useState('')
   const [mode, setMode] = useState<'auto' | 'interview' | 'auto_edit'>('auto')
-  const [job, setJob] = useState<Job | null>(null)
-  const [clips, setClips] = useState<Clip[]>([])
+  const [job, setJob] = useState<Job | null>(null)          // primary/latest job
+  const [clips, setClips] = useState<Clip[]>([])            // clips from primary job
+  const [extraJobs, setExtraJobs] = useState<Job[]>([])     // additional concurrent jobs
+  const [extraClips, setExtraClips] = useState<Record<string, Clip[]>>({}) // clips keyed by jobId
   const [submitting, setSubmitting] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [videoErrors, setVideoErrors] = useState<Set<string>>(new Set())
@@ -102,6 +104,7 @@ export default function DashboardPage() {
   const [vodDuration, setVodDuration] = useState<number | null>(null)
   const [showChunkOptions, setShowChunkOptions] = useState(false)
   const pollRef = useRef<NodeJS.Timeout | null>(null)
+  const extraPollRefs = useRef<Record<string, NodeJS.Timeout>>({})
 
   const source = detectSource(url)
 
@@ -222,6 +225,36 @@ export default function DashboardPage() {
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [job?.id, job?.status === 'queued']) // only restart polling when job id changes or becomes active
 
+  // Poll extra jobs
+  useEffect(() => {
+    const activeExtra = extraJobs.filter(j => ACTIVE_STATUSES.includes(j.status))
+    for (const ej of activeExtra) {
+      if (extraPollRefs.current[ej.id]) continue // already polling
+      const poll = async () => {
+        if (!tokenRef.current) return
+        const res = await fetch(`/api/jobs/${ej.id}`, { headers: { Authorization: `Bearer ${tokenRef.current}` } })
+        const data = await res.json()
+        if (data.job) setExtraJobs(prev => prev.map(j => j.id === ej.id ? { ...j, ...data.job } : j))
+        if (data.clips?.length > 0) setExtraClips(prev => ({ ...prev, [ej.id]: data.clips }))
+        if (['done','error','cancelled'].includes(data.job?.status)) {
+          clearInterval(extraPollRefs.current[ej.id])
+          delete extraPollRefs.current[ej.id]
+          if (data.job?.status === 'done') {
+            setTimeout(async () => {
+              const r2 = await fetch(`/api/jobs/${ej.id}`, { headers: { Authorization: `Bearer ${tokenRef.current}` } })
+              const d2 = await r2.json()
+              if (d2.clips?.length > 0) setExtraClips(prev => ({ ...prev, [ej.id]: d2.clips }))
+            }, 3000)
+          }
+        }
+      }
+      poll()
+      extraPollRefs.current[ej.id] = setInterval(poll, 2000)
+    }
+    // Cleanup refs for removed jobs
+    return () => {}
+  }, [extraJobs.map(j => j.id + j.status).join(',')])
+
   async function startJob(targetUrl: string) {
     setSubmitting(true); setError(''); setClips([]); setJob(null); setShowChunkOptions(false)
 
@@ -235,7 +268,13 @@ export default function DashboardPage() {
     setSubmitting(false)
     if (!jobRes.ok) { setError(jobData.error ?? 'Failed to start job'); return }
     const newJob: Job = { id: jobData.jobId, status: 'queued', progress: 0, progress_msg: 'Starting...', source_url: targetUrl }
-    setJob(newJob)
+    setJob(prev => {
+      // If there's already a primary active job, push it to extraJobs and make this the new primary
+      if (prev && ACTIVE_STATUSES.includes(prev.status)) {
+        setExtraJobs(ej => [prev, ...ej.filter(j => j.id !== prev.id)])
+      }
+      return newJob
+    })
     setUrl('') // clear input after job starts
   }
 
@@ -246,7 +285,14 @@ export default function DashboardPage() {
     await startJob(url)
   }
 
-  function dismissJob() {
+  function dismissJob(jobId?: string) {
+    if (jobId && jobId !== job?.id) {
+      // Dismiss an extra job
+      setExtraJobs(prev => prev.filter(j => j.id !== jobId))
+      setExtraClips(prev => { const n = {...prev}; delete n[jobId]; return n })
+      if (extraPollRefs.current[jobId]) { clearInterval(extraPollRefs.current[jobId]); delete extraPollRefs.current[jobId] }
+      return
+    }
     setJob(null); setClips([]); setOpenStudio(null); setUrl('')
     if (user) localStorage.removeItem(`cf_active_job_${user.id}`)
   }
@@ -367,7 +413,26 @@ export default function DashboardPage() {
     }
   }
 
+  async function downloadClip(fileUrl: string, clipId: string) {
+    try {
+      const res = await fetch(fileUrl)
+      const blob = await res.blob()
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `clip-${clipId.slice(0,8)}.mp4`
+      document.body.appendChild(a); a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000)
+    } catch {
+      // Fallback: open in new tab if fetch fails (e.g. CORS)
+      window.open(fileUrl, '_blank')
+    }
+  }
+
   const isJobActive = job && ACTIVE_STATUSES.includes(job.status)
+  const allActiveJobs = [job, ...extraJobs].filter(j => j && ACTIVE_STATUSES.includes(j!.status)) as Job[]
+  const maxConcurrent = quota?.maxConcurrent ?? 1
+  const atConcurrentLimit = allActiveJobs.length >= maxConcurrent
   const chunkOptions = vodDuration ? getChunkOptions(vodDuration) : []
 
   return (
@@ -407,7 +472,7 @@ export default function DashboardPage() {
             <div className="flex gap-3">
               <input type="url" placeholder="Paste a URL..." value={url} onChange={e => setUrl(e.target.value)} required
                 className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-[#FF6B00] transition-colors" />
-              <button type="submit" disabled={submitting || !url || (!!source && !sourceFlags[source as keyof typeof sourceFlags]) || !!isJobActive}
+              <button type="submit" disabled={submitting || !url || (!!source && !sourceFlags[source as keyof typeof sourceFlags]) || atConcurrentLimit}
                 className="bg-[#FF6B00] text-white font-medium px-5 py-2.5 rounded-xl hover:bg-[#e55f00] disabled:opacity-50 whitespace-nowrap">
                 {submitting ? 'Starting...' : 'Find clips'}
               </button>
@@ -428,8 +493,15 @@ export default function DashboardPage() {
             )}
 
             {/* Concurrent job notice */}
-            {isJobActive && (
-              <p className="text-yellow-400/70 text-xs mt-2">⏳ A job is already running. Cancel it or wait for it to finish before starting a new one.</p>
+            {atConcurrentLimit && (
+              <p className="text-yellow-400/70 text-xs mt-2">
+                ⏳ {allActiveJobs.length} job{allActiveJobs.length > 1 ? 's' : ''} running
+                {maxConcurrent <= 1 ? ' — free accounts can only run 1 at a time. ' : ` — you've hit your limit of ${maxConcurrent}. `}
+                {quota?.tier === 'free' ? <Link href="/pricing" className="underline text-[#FF6B00]/80">Upgrade to Pro for 2 concurrent</Link> : 'Wait for one to finish.'}
+              </p>
+            )}
+            {isJobActive && !atConcurrentLimit && maxConcurrent > 1 && (
+              <p className="text-white/30 text-xs mt-2">✓ {allActiveJobs.length}/{maxConcurrent} slots used — you can queue another</p>
             )}
 
             <div className="flex gap-2 mt-4 flex-wrap">
@@ -502,21 +574,84 @@ export default function DashboardPage() {
 
         {/* Cancelled */}
         {job?.status === 'cancelled' && (
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-5 mb-8">
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-5 mb-4 flex items-center justify-between">
             <p className="text-white/60 text-sm">Job cancelled.</p>
+            <button onClick={() => dismissJob()} className="text-xs text-white/30 hover:text-white/60">✕ Dismiss</button>
           </div>
         )}
 
         {/* Error */}
         {job?.status === 'error' && (
-          <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-5 mb-8">
-            <p className="text-red-400 text-sm font-medium mb-1">Processing failed</p>
+          <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-5 mb-4">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-red-400 text-sm font-medium">Processing failed</p>
+              <button onClick={() => dismissJob()} className="text-xs text-white/30 hover:text-white/60">✕ Dismiss</button>
+            </div>
             <p className="text-red-400/70 text-xs">{job.error_msg ?? 'Something went wrong'}</p>
             {job.error_msg?.includes('cookies') && (
               <Link href="/settings" className="mt-2 inline-block text-xs text-yellow-400 underline">Update YouTube cookies →</Link>
             )}
           </div>
         )}
+
+        {/* Extra concurrent jobs */}
+        {extraJobs.map(ej => (
+          <div key={ej.id} className="mb-4">
+            {ACTIVE_STATUSES.includes(ej.status) && (
+              <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-sm font-medium capitalize text-white/70">Job 2 — {ej.status.replace('_',' ')}...</span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm text-white/40">{ej.progress}%</span>
+                    <button onClick={() => dismissJob(ej.id)} className="text-xs text-white/30 hover:text-white/60 border border-white/10 px-2.5 py-1 rounded-lg">✕</button>
+                  </div>
+                </div>
+                <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                  <div className="h-full bg-[#FF6B00]/60 rounded-full transition-all duration-500" style={{ width: `${ej.progress}%` }} />
+                </div>
+                {ej.progress_msg && <p className="text-xs text-white/30 mt-1">{ej.progress_msg}</p>}
+              </div>
+            )}
+            {ej.status === 'done' && extraClips[ej.id]?.length > 0 && (
+              <div className="bg-white/3 border border-white/10 rounded-2xl overflow-hidden">
+                <div className="flex items-center justify-between px-5 py-3 border-b border-white/10">
+                  <span className="text-sm font-medium text-white/60">{extraClips[ej.id].length} clips (job 2)</span>
+                  <button onClick={() => dismissJob(ej.id)} className="text-xs text-white/30 hover:text-white/60">✕ Dismiss</button>
+                </div>
+                <div className="p-4 space-y-4">
+                  {extraClips[ej.id].map(clip => (
+                    <div key={clip.id} className="bg-white/5 border border-white/10 rounded-xl flex gap-3 p-3 items-start">
+                      {clip.file_url && (
+                        <video src={clip.file_url} controls className="w-40 rounded-lg flex-shrink-0" style={{ maxHeight: '90px' }} />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate mb-1">{clip.title ?? 'Untitled'}</p>
+                        <p className="text-xs text-white/40 line-clamp-2">{clip.summary}</p>
+                        <div className="flex gap-2 mt-2">
+                          {clip.file_url && (
+                            <button onClick={() => {
+                              fetch(clip.file_url!).then(r => r.blob()).then(b => {
+                                const a = document.createElement('a'); a.href = URL.createObjectURL(b)
+                                a.download = `clip-${clip.id.slice(0,8)}.mp4`; a.click()
+                              })
+                            }} className="text-xs bg-white/10 text-white/50 hover:bg-white/20 px-2 py-1 rounded-lg">⬇️ Download</button>
+                          )}
+                          <Link href={`/clips/${clip.id}`} className="text-xs bg-[#FF6B00]/20 text-[#FF6B00] hover:bg-[#FF6B00]/30 px-2 py-1 rounded-lg">Open →</Link>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {ej.status === 'error' && (
+              <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-4 flex items-center justify-between">
+                <p className="text-red-400/70 text-sm">Job 2 failed: {ej.error_msg ?? 'Unknown error'}</p>
+                <button onClick={() => dismissJob(ej.id)} className="text-xs text-white/30 hover:text-white/60">✕</button>
+              </div>
+            )}
+          </div>
+        ))}
 
         {/* Clips */}
         {clips.length > 0 && (
@@ -615,7 +750,7 @@ export default function DashboardPage() {
                             🎬 Open clip
                           </Link>
                           {clip.file_url && (
-                            <a href={clip.file_url} className="text-xs bg-white/10 hover:bg-white/20 px-3 py-2 rounded-lg transition-colors text-white/60" download>⬇️ Download</a>
+                            <button onClick={() => downloadClip(clip.file_url!, clip.id)} className="text-xs bg-white/10 hover:bg-white/20 px-3 py-2 rounded-lg transition-colors text-white/60">⬇️ Download</button>
                           )}
                           <button onClick={() => setOpenStudio(isOpen ? null : clip.id)}
                             className={`text-xs px-3 py-2 rounded-lg transition-colors font-medium ${isOpen ? 'bg-[#FF6B00] text-white' : 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30 hover:bg-[#FF6B00]/30'}`}>
