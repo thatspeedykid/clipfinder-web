@@ -648,7 +648,7 @@ export default function AdminPage() {
                 <div className="space-y-2">
                   {keys.map(({ key, label, hint, secret }) => {
                     const dbRow = config.find(r => r.key === key)
-                    const hasValue = dbRow?.hasValue || !!process.env?.[key]
+                    const hasValue = dbRow?.hasValue ?? false
                     return (
                       <div key={key} className="bg-white/5 border border-white/10 rounded-xl p-3">
                         <div className="flex items-start justify-between gap-4">
