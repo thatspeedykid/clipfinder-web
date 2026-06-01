@@ -83,6 +83,7 @@ export default function DashboardPage() {
   const [quota, setQuota] = useState<Quota | null>(null)
   const [sourceFlags, setSourceFlags] = useState({ youtube: false, kick: true, twitch: true, twitter: true, mode_auto: true, mode_interview: true, mode_auto_edit: true, post_bridge: true })
   const [url, setUrl] = useState('')
+  const [streamerName, setStreamerName] = useState('')
   const [mode, setMode] = useState<'auto' | 'interview' | 'auto_edit'>('auto')
   const [job, setJob] = useState<Job | null>(null)
   const [clips, setClips] = useState<Clip[]>([])
@@ -322,6 +323,16 @@ export default function DashboardPage() {
                 className="bg-[#FF6B00] text-white font-medium px-5 py-2.5 rounded-xl hover:bg-[#e55f00] disabled:opacity-50 whitespace-nowrap">
                 {submitting ? 'Starting...' : 'Find clips'}
               </button>
+            </div>
+
+            <div className="mt-3">
+              <input
+                type="text"
+                placeholder="Streamer name (optional, helps AI descriptions)"
+                value={streamerName}
+                onChange={e => setStreamerName(e.target.value)}
+                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-sm text-white placeholder-white/30 focus:outline-none focus:border-[#FF6B00]/50 transition-colors"
+              />
             </div>
 
             {source && !sourceFlags[source as keyof typeof sourceFlags] && (

@@ -725,11 +725,24 @@ def process_video(job_id: str, source_url: str, user_id: str, mode: str = "auto"
             clip_id_map = {c.get("start_ts", ""): c.get("id", "") for c in clips_data}
             print(f"[segments] AI found {len(clips_data)} clips to cut")
 
-            # Update full clip with AI-generated description
-            if full_clip_id and clips_data:
+            # Update full clip with a proper standalone description
+            if full_clip_id:
                 prefix = streamer_name.capitalize() if streamer_name else "Extension"
-                top_summaries = [c.get("summary","") for c in clips_data[:3] if c.get("summary")]
-                full_summary = " | ".join(top_summaries) if top_summaries else f"Full combined clip from {prefix}'s stream"
+                # Build a description that describes the full clip as a whole
+                # Use the first clip's title/summary if AI found clips, otherwise describe from transcript
+                if clips_data:
+                    best = clips_data[0]
+                    # Create a description that represents the full combined content
+                    topics = list(dict.fromkeys(c.get("title","") for c in clips_data if c.get("title")))[:4]
+                    if len(topics) > 1:
+                        topics_str = ", ".join(topics[:-1]) + f" and {topics[-1]}"
+                        full_summary = f"{prefix} discusses {topics_str}"
+                    elif topics:
+                        full_summary = f"{prefix} — {topics[0]}"
+                    else:
+                        full_summary = f"Full {int(combined_duration//60)}m clip from {prefix}'s stream"
+                else:
+                    full_summary = f"Full {int(combined_duration//60)}m clip from {prefix}'s stream"
                 sb.table("clips").update({
                     "title": f"{prefix} — Full clip ({int(combined_duration//60)}:{int(combined_duration%60):02d})",
                     "summary": full_summary[:500],

@@ -72,19 +72,29 @@ export async function POST(req: NextRequest) {
     if (body.is_multi_segment) workerPayload.is_multi_segment = body.is_multi_segment
     if (body.total_duration_sec) workerPayload.total_duration_sec = body.total_duration_sec
 
-    const workerRes = await fetch(workerUrl, {
+    // Fire-and-forget — return jobId immediately, dont wait for Modal cold start
+    // Modal cold starts can take 10-30s which would hang or timeout the request.
+    // The worker updates job status in Supabase directly; client polls for progress.
+    fetch(workerUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(workerPayload),
+    }).then(async (workerRes) => {
+      if (!workerRes.ok) {
+        const errBody = await workerRes.json().catch(() => ({}))
+        console.error('[jobs POST] worker error:', workerRes.status, errBody)
+        await supabase.from('jobs').update({
+          status: 'error',
+          progress_msg: errBody.error ?? 'Failed to start worker',
+        }).eq('id', job.id)
+      }
+    }).catch(async (err) => {
+      console.error('[jobs POST] worker fetch failed:', err)
+      await supabase.from('jobs').update({
+        status: 'error',
+        progress_msg: 'Could not reach worker',
+      }).eq('id', job.id)
     })
-
-    if (!workerRes.ok) {
-      const errBody = await workerRes.json().catch(() => ({}))
-      console.error('[jobs POST] worker error:', workerRes.status, errBody)
-      // Clean up the job row since worker failed to start
-      await supabase.from('jobs').delete().eq('id', job.id)
-      return NextResponse.json({ error: errBody.error ?? 'Failed to start worker' }, { status: 502 })
-    }
 
     return NextResponse.json({ success: true, jobId: job.id })
 
