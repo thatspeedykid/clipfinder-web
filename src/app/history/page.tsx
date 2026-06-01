@@ -72,6 +72,31 @@ export default function HistoryPage() {
   const [openStudio, setOpenStudio] = useState<string | null>(null)
   const [clearing, setClearing] = useState(false)
   const [videoErrors, setVideoErrors] = useState<Set<string>>(new Set())
+  const [refreshingUrls, setRefreshingUrls] = useState<Set<string>>(new Set())
+
+  // When a video fails (e.g. old public URL now dead), fetch a fresh pre-signed URL via stream proxy
+  async function refreshClipUrl(jobId: string, clipId: string) {
+    if (refreshingUrls.has(clipId)) return
+    setRefreshingUrls(prev => new Set([...prev, clipId]))
+    try {
+      const res = await fetch(`/api/clips/${clipId}/stream`, { headers: { Authorization: `Bearer ${token}` } })
+      if (res.ok || res.redirected) {
+        const freshUrl = res.url
+        setJobClips(prev => ({
+          ...prev,
+          [jobId]: (prev[jobId] ?? []).map(c => c.id === clipId ? { ...c, file_url: freshUrl } : c)
+        }))
+        // Clear the error so video re-renders
+        setVideoErrors(prev => { const n = new Set(prev); n.delete(clipId); return n })
+      } else {
+        setVideoErrors(prev => new Set([...prev, clipId]))
+      }
+    } catch {
+      setVideoErrors(prev => new Set([...prev, clipId]))
+    } finally {
+      setRefreshingUrls(prev => { const n = new Set(prev); n.delete(clipId); return n })
+    }
+  }
 
   async function downloadClip(fileUrl: string, clipId: string) {
     const downloadUrl = `/api/clips/${clipId}/stream?download=1`
@@ -130,7 +155,7 @@ export default function HistoryPage() {
     const res = await fetch(`/api/jobs/${jobId}`, { headers: { Authorization: `Bearer ${token}` } })
     if (res.ok) {
       const d = await res.json()
-      // Clips are on R2 — file_url is already a public URL, no signed URL needed
+      // /api/jobs route now returns pre-signed R2 URLs — ready for <video> directly
       setJobClips(prev => ({ ...prev, [jobId]: d.clips ?? [] }))
     }
     setLoadingClips(null)
@@ -244,9 +269,22 @@ export default function HistoryPage() {
                           <div className="flex flex-col lg:flex-row">
                             {/* LEFT — video */}
                             <div className="lg:w-[45%] bg-black flex items-center justify-center" style={{ minHeight: '220px' }}>
-                              {clip.file_url && !expired && !videoErrors.has(clip.id) ? (
-                                <video src={clip.file_url} controls className="w-full h-full object-contain" style={{ maxHeight: '280px' }}
-                                  onError={() => setVideoErrors(prev => new Set([...prev, clip.id]))} />
+                              {clip.storage_path && !expired && !videoErrors.has(clip.id) ? (
+                                refreshingUrls.has(clip.id) ? (
+                                  <div className="text-center text-white/20 p-6">
+                                    <p className="text-xs animate-pulse">Loading video...</p>
+                                  </div>
+                                ) : (
+                                  <video src={clip.file_url || undefined} controls className="w-full h-full object-contain" style={{ maxHeight: '280px' }}
+                                    onError={() => {
+                                      // Try to refresh the URL before giving up
+                                      if (clip.storage_path && token) {
+                                        refreshClipUrl(expandedJob!, clip.id)
+                                      } else {
+                                        setVideoErrors(prev => new Set([...prev, clip.id]))
+                                      }
+                                    }} />
+                                )
                               ) : (
                                 <div className="text-center text-white/20 p-6">
                                   <p className="text-2xl mb-1">{expired ? '⏰' : videoErrors.has(clip.id) ? '⚠️' : '🎬'}</p>
@@ -275,8 +313,8 @@ export default function HistoryPage() {
                                 <Link href={`/clips/${clip.id}`} className="text-xs bg-white/10 text-white/60 hover:bg-white/20 px-3 py-2 rounded-lg">
                                   🎬 Open clip
                                 </Link>
-                                {clip.file_url && !expired && (
-                                  <button onClick={() => downloadClip(clip.file_url!, clip.id)} className="text-xs bg-white/10 text-white/60 hover:bg-white/20 px-3 py-2 rounded-lg">⬇️ Download</button>
+                                {clip.storage_path && !expired && (
+                                  <button onClick={() => downloadClip(clip.file_url ?? '', clip.id)} className="text-xs bg-white/10 text-white/60 hover:bg-white/20 px-3 py-2 rounded-lg">⬇️ Download</button>
                                 )}
                                 <button onClick={() => setOpenStudio(isOpen ? null : clip.id)}
                                   className={`text-xs px-3 py-2 rounded-lg font-medium transition-colors ${isOpen ? 'bg-[#FF6B00] text-white' : 'bg-[#FF6B00]/20 text-[#FF6B00] border border-[#FF6B00]/30 hover:bg-[#FF6B00]/30'}`}>
