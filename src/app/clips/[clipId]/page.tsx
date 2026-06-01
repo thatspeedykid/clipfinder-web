@@ -71,13 +71,14 @@ export default function ClipDetailPage() {
 
       if (!data) { router.replace('/dashboard'); return }
 
-      // Get fresh signed URL if storage_path exists
+      // R2 bucket is private — fetch pre-signed URL via stream proxy
       if (data.storage_path) {
         try {
-          const { data: signed } = await supabase.storage
-            .from('clips')
-            .createSignedUrl(data.storage_path, 3600)
-          setClip({ ...data, file_url: signed?.signedUrl ?? data.file_url })
+          const streamRes = await fetch(`/api/clips/${data.id}/stream`, {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          })
+          // fetch follows the 302 redirect to the signed R2 URL — use final URL for <video>
+          setClip({ ...data, file_url: streamRes.url || data.file_url })
         } catch {
           setClip(data)
         }
@@ -307,8 +308,10 @@ export default function ClipDetailPage() {
                   style={{ maxHeight: '60vh', objectFit: 'contain' }}
                   onError={() => {
                     // Proxy URL expired — refresh by re-appending a cache-bust param
-                    if (clip.storage_path) {
-                      setClip(prev => prev ? { ...prev, file_url: `/api/clips/${prev.id}/stream?t=${Date.now()}` } : null)
+                    if (clip.storage_path && tokenRef.current) {
+                      fetch(`/api/clips/${clip.id}/stream`, { headers: { Authorization: `Bearer ${tokenRef.current}` } })
+                        .then(r => { if (r.url) setClip(prev => prev ? { ...prev, file_url: r.url } : null) })
+                        .catch(() => {})
                     }
                   }}
                 />

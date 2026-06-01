@@ -4,59 +4,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
 import crypto from 'crypto'
-
-const SIGNED_URL_TTL = 900 // 15 minutes in seconds
-
-function r2SignedUrl(storagePath: string): string {
-  const accountId  = process.env.R2_ACCOUNT_ID ?? ''
-  const accessKey  = process.env.R2_ACCESS_KEY_ID ?? ''
-  const secretKey  = process.env.R2_SECRET_ACCESS_KEY ?? ''
-  const bucket     = process.env.R2_BUCKET_NAME ?? 'clipfinder-clips'
-
-  const now        = new Date()
-  const pad        = (n: number) => String(n).padStart(2, '0')
-  const dateStamp  = `${now.getUTCFullYear()}${pad(now.getUTCMonth()+1)}${pad(now.getUTCDate())}`
-  const amzDate    = `${dateStamp}T${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}Z`
-  const host       = `${accountId}.r2.cloudflarestorage.com`
-  const encodedPath = '/' + bucket + '/' + storagePath.split('/').map(encodeURIComponent).join('/')
-  const credScope  = `${dateStamp}/auto/s3/aws4_request`
-
-  // Canonical query string for pre-signed URL
-  const queryParams: Record<string, string> = {
-    'X-Amz-Algorithm':     'AWS4-HMAC-SHA256',
-    'X-Amz-Credential':    `${accessKey}/${credScope}`,
-    'X-Amz-Date':          amzDate,
-    'X-Amz-Expires':       String(SIGNED_URL_TTL),
-    'X-Amz-SignedHeaders': 'host',
-  }
-  const canonicalQueryString = Object.keys(queryParams)
-    .sort()
-    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(queryParams[k])}`)
-    .join('&')
-
-  const canonicalRequest = [
-    'GET',
-    encodedPath,
-    canonicalQueryString,
-    `host:${host}\n`,   // canonical headers
-    'host',             // signed headers
-    'UNSIGNED-PAYLOAD',
-  ].join('\n')
-
-  const stringToSign = [
-    'AWS4-HMAC-SHA256',
-    amzDate,
-    credScope,
-    crypto.createHash('sha256').update(canonicalRequest).digest('hex'),
-  ].join('\n')
-
-  const hmac = (key: Buffer | string, data: string): Buffer =>
-    crypto.createHmac('sha256', key).update(data).digest()
-  const signingKey = hmac(hmac(hmac(hmac(Buffer.from('AWS4' + secretKey, 'utf8'), dateStamp), 'auto'), 's3'), 'aws4_request')
-  const signature  = crypto.createHmac('sha256', signingKey).update(stringToSign).digest('hex')
-
-  return `https://${host}${encodedPath}?${canonicalQueryString}&X-Amz-Signature=${signature}`
-}
+import { r2SignedUrl } from '@/lib/r2'
 
 export async function GET(
   req: NextRequest,

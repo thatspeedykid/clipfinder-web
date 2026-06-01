@@ -1,6 +1,7 @@
 // src/app/api/jobs/[jobId]/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/server'
+import { r2SignedUrl } from '@/lib/r2'
 
 export async function GET(
   req: NextRequest,
@@ -38,14 +39,13 @@ export async function GET(
         .order('score', { ascending: false })
 
       if (data) {
-        // R2 bucket is PRIVATE — serve all clips through the /api/clips/[id]/stream proxy.
-        // The proxy verifies auth and generates a short-lived pre-signed URL.
-        const baseUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') ?? ''
+        // R2 bucket is PRIVATE — generate pre-signed URLs server-side (15 min TTL).
+        // <video src> can use these directly; no auth header needed.
         clips = data.map(clip => {
           const isExpired = clip.file_expires_at && new Date(clip.file_expires_at) < new Date()
           if (isExpired) return { ...clip, file_url: null }
           if (!clip.storage_path) return clip
-          return { ...clip, file_url: `${baseUrl}/api/clips/${clip.id}/stream` }
+          return { ...clip, file_url: r2SignedUrl(clip.storage_path, 900) }
         })
       }
     }
