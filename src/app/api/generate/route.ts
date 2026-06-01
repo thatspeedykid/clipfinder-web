@@ -173,47 +173,68 @@ Start with OPTION 1 immediately. No intro text.`
 }
 
 // ─── AI caller ────────────────────────────────────────────────────────────────
-async function callAI(prompt: string): Promise<string> {
+// Race Gemini and Groq — use whichever responds first with a non-empty result
+async function callAI(prompt: string, fastMode = false): Promise<string> {
   const geminiKey = process.env.GEMINI_API_KEY
   const groqKey   = process.env.GROQ_API_KEY
+  // Fast mode (All Socials): use Groq with smaller fast model to avoid timeouts
+  const groqModel = fastMode ? 'llama-3.1-8b-instant' : 'llama-3.3-70b-versatile'
+  const maxTokens = fastMode ? 800 : 2000
+  const timeoutMs = fastMode ? 15000 : 22000
 
-  const calls: Promise<string>[] = []
+  const makeGemini = () => geminiKey ? fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.85, maxOutputTokens: maxTokens }
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    }
+  ).then(r => r.json()).then(d => {
+    const text = d.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+    if (!text.trim()) throw new Error('empty')
+    return text
+  }) : Promise.reject('no key')
 
-  if (geminiKey) {
-    calls.push(
-      fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.85, maxOutputTokens: 2000 }
-        }),
-        signal: AbortSignal.timeout(28000),
-      }).then(r => r.json()).then(d => d.candidates?.[0]?.content?.parts?.[0]?.text ?? '')
+  const makeGroq = () => groqKey ? fetch(
+    'https://api.groq.com/openai/v1/chat/completions',
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${groqKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: groqModel,
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: maxTokens, temperature: 0.85,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    }
+  ).then(r => r.json()).then(d => {
+    const text = d.choices?.[0]?.message?.content ?? ''
+    if (!text.trim()) throw new Error('empty')
+    return text
+  }) : Promise.reject('no key')
+
+  if (!geminiKey && !groqKey) throw new Error('No AI API keys configured')
+
+  // Promise.any — use whichever AI responds first with real content
+  try {
+    const calls = [makeGemini(), makeGroq()].filter((_, i) =>
+      i === 0 ? !!geminiKey : !!groqKey
     )
+    return await Promise.any(calls)
+  } catch {
+    // Both failed — try each sequentially as last resort
+    if (geminiKey) {
+      try { return await makeGemini() } catch {}
+    }
+    if (groqKey) {
+      try { return await makeGroq() } catch {}
+    }
+    throw new Error('All AI calls failed')
   }
-
-  if (groqKey) {
-    calls.push(
-      fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${groqKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
-          messages: [{ role: 'user', content: prompt }],
-          max_tokens: 2000, temperature: 0.85,
-        }),
-        signal: AbortSignal.timeout(28000),
-      }).then(r => r.json()).then(d => d.choices?.[0]?.message?.content ?? '')
-    )
-  }
-
-  if (calls.length === 0) throw new Error('No AI API keys configured')
-  const results = await Promise.allSettled(calls)
-  for (const r of results) {
-    if (r.status === 'fulfilled' && r.value?.trim()) return r.value
-  }
-  throw new Error('All AI calls failed')
 }
 
 // ─── Parse 3 options from AI response ────────────────────────────────────────
@@ -298,11 +319,11 @@ export async function POST(req: NextRequest) {
 
     await Promise.all(targetPlatforms.map(async (p) => {
       const prompt = buildPrompt(transcript || videoTitle, tone, p, streamerName, videoTitle, isAllSocials)
-      const raw = await callAI(prompt)
+      // Fast mode for All Socials (4 parallel calls) — use faster model to avoid Vercel timeout
+      const raw = await callAI(prompt, isAllSocials)
       console.log(`[generate] ${p} len=${raw.length} name="${streamerName}" snippet="${raw.slice(0, 60).replace(/\n/g, ' ')}"`)
 
       if (isAllSocials) {
-        // All-socials mode: wrap single result in array
         results[p] = { options: [raw.trim()], hook_line: '' }
       } else {
         results[p] = { options: parseOptions(raw), hook_line: '' }

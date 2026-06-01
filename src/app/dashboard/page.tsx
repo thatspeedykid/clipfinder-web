@@ -867,7 +867,24 @@ export default function DashboardPage() {
                         )}
 
                         {/* All Socials panel */}
-                        {studio.allSocials && (
+                        {studio.allSocialsGenerating && (
+                          <div className="space-y-3">
+                            {(['𝕏 Twitter/X','📸 Instagram','🎵 TikTok','▶ YT Shorts']).map(label => (
+                              <div key={label} className="bg-white/3 border border-white/10 rounded-xl overflow-hidden">
+                                <div className="px-4 py-2.5 border-b border-white/10 bg-white/5">
+                                  <span className="text-xs font-semibold text-white/50">{label}</span>
+                                </div>
+                                <div className="p-4 space-y-2">
+                                  <div className="h-3 bg-white/5 rounded animate-pulse w-3/4" />
+                                  <div className="h-3 bg-white/5 rounded animate-pulse w-full" />
+                                  <div className="h-3 bg-white/5 rounded animate-pulse w-1/2" />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {studio.allSocials && !studio.allSocialsGenerating && (
                           <div className="space-y-4">
                             {(['twitter', 'instagram', 'tiktok', 'youtube'] as const).map(p => {
                               const platData = studio.allSocials![p]
